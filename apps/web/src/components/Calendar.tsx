@@ -18,7 +18,7 @@ interface CalendarProps {
 
 export default function Calendar(props: CalendarProps) {
   const today = new Date();
-  const todayStr = today.toISOString().split("T")[0];
+  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
 
   const [year, setYear] = createSignal(today.getFullYear());
   const [month, setMonth] = createSignal(today.getMonth() + 1); // 1-based

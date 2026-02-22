@@ -3,8 +3,18 @@ use axum::{
     http::{header, StatusCode},
     Json,
 };
-use chrono::Datelike;
+use chrono::{Datelike, FixedOffset, Utc};
 use std::sync::Arc;
+
+/// Moscow timezone (UTC+3)
+fn moscow_now() -> chrono::DateTime<FixedOffset> {
+    let msk = FixedOffset::east_opt(3 * 3600).unwrap();
+    Utc::now().with_timezone(&msk)
+}
+
+fn moscow_today() -> String {
+    moscow_now().format("%Y-%m-%d").to_string()
+}
 
 use crate::{
     auth,
@@ -93,7 +103,7 @@ pub async fn available_dates_for_service(
     // Get all dates with free slots in the future
     let dates: Vec<String> = sqlx::query_scalar(
         "SELECT DISTINCT date FROM available_slots
-         WHERE is_booked = 0 AND date >= date('now')
+         WHERE is_booked = 0 AND date >= date('now', '+3 hours')
          ORDER BY date ASC"
     )
     .fetch_all(&state.db)
@@ -156,7 +166,7 @@ pub async fn available_times(
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Calculate days until
-    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let today = moscow_today();
     let days_until = days_between(&today, &query.date);
     let is_tight = days_until <= 3;
 
@@ -360,7 +370,7 @@ pub async fn create_booking(
         client_username: user.username,
         client_first_name: user.first_name,
         status: "confirmed".into(),
-        created_at: chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+        created_at: moscow_now().format("%Y-%m-%d %H:%M:%S").to_string(),
         with_lower_lashes: Some(body.with_lower_lashes),
         total_price: Some(total_price),
     };
@@ -394,7 +404,7 @@ pub async fn my_bookings(
          JOIN services s ON s.id = b.service_id
          LEFT JOIN available_slots sl ON sl.id = b.slot_id
          WHERE b.client_tg_id = ? AND b.status = 'confirmed'
-         AND COALESCE(b.date, sl.date) >= date('now')
+         AND COALESCE(b.date, sl.date) >= date('now', '+3 hours')
          ORDER BY COALESCE(b.date, sl.date) ASC, COALESCE(b.start_time, sl.start_time) ASC"
     )
     .bind(user.id)
@@ -428,7 +438,7 @@ pub async fn cancel_booking(
     .ok_or_else(|| (StatusCode::NOT_FOUND, Json(ApiResponse::error("Запись не найдена"))))?;
 
     // Cancel booking
-    sqlx::query("UPDATE bookings SET status = 'cancelled', cancelled_at = datetime('now') WHERE id = ?")
+    sqlx::query("UPDATE bookings SET status = 'cancelled', cancelled_at = datetime('now', '+3 hours') WHERE id = ?")
         .bind(id)
         .execute(&state.db)
         .await
@@ -518,7 +528,7 @@ pub async fn calendar(
     .map(|d| d.day())
     .unwrap_or(28);
 
-    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let today = moscow_today();
 
     let mut calendar_days = Vec::new();
 

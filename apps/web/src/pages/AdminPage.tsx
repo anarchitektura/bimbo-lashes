@@ -6,14 +6,18 @@ import { friendlyDate, formatTime, formatPrice, formatDateShort } from "../lib/u
 import Loader from "../components/Loader";
 
 export default function AdminPage() {
-  const today = new Date().toISOString().split("T")[0];
-  const tomorrow = new Date(Date.now() + 86400000).toISOString().split("T")[0];
+  const _now = new Date();
+  const _fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const today = _fmt(_now);
+  const _tmrw = new Date(_now); _tmrw.setDate(_tmrw.getDate() + 1);
+  const tomorrow = _fmt(_tmrw);
 
   const [activeTab, setActiveTab] = createSignal<"today" | "tomorrow" | "week">("today");
 
   // Compute date range for the week (next 7 days)
   const weekFrom = today;
-  const weekTo = new Date(Date.now() + 6 * 86400000).toISOString().split("T")[0];
+  const _wEnd = new Date(_now); _wEnd.setDate(_wEnd.getDate() + 6);
+  const weekTo = _fmt(_wEnd);
 
   const [todayBookings, { refetch: refetchToday }] = createResource(() =>
     adminApi.getBookings({ date: today })

@@ -367,7 +367,7 @@ pub async fn list_bookings(
              FROM bookings b
              JOIN services s ON s.id = b.service_id
              LEFT JOIN available_slots sl ON sl.id = b.slot_id
-             WHERE COALESCE(b.date, sl.date) >= date('now') AND b.status = 'confirmed'
+             WHERE COALESCE(b.date, sl.date) >= date('now', '+3 hours') AND b.status = 'confirmed'
              ORDER BY COALESCE(b.date, sl.date) ASC, COALESCE(b.start_time, sl.start_time) ASC"
         )
         .fetch_all(&state.db)
@@ -396,7 +396,7 @@ pub async fn cancel_booking(
     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::error("DB error"))))?
     .ok_or_else(|| (StatusCode::NOT_FOUND, Json(ApiResponse::error("Запись не найдена"))))?;
 
-    sqlx::query("UPDATE bookings SET status = 'cancelled', cancelled_at = datetime('now') WHERE id = ?")
+    sqlx::query("UPDATE bookings SET status = 'cancelled', cancelled_at = datetime('now', '+3 hours') WHERE id = ?")
         .bind(id)
         .execute(&state.db)
         .await

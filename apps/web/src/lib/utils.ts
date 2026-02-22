@@ -38,16 +38,21 @@ export function formatDuration(min: number): string {
   return `${h} ч ${m} мин`;
 }
 
+/** Get local date string YYYY-MM-DD */
+function localDateStr(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 /** Check if a date is today */
 export function isToday(dateStr: string): boolean {
-  const today = new Date().toISOString().split("T")[0];
-  return dateStr === today;
+  return dateStr === localDateStr(new Date());
 }
 
 /** Check if a date is tomorrow */
 export function isTomorrow(dateStr: string): boolean {
-  const tomorrow = new Date(Date.now() + 86400000).toISOString().split("T")[0];
-  return dateStr === tomorrow;
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  return dateStr === localDateStr(tomorrow);
 }
 
 /** Friendly date: today/tomorrow/formatted */
