@@ -102,9 +102,9 @@ jobs:
             echo "--- Phase 4: Deploy ---"
             docker compose up -d
 
-            # Phase 5: Health check
+            # Phase 5: Health check (20 attempts x 5s = 100s max wait)
             echo "--- Phase 5: Health check ---"
-            if ./scripts/health-check.sh 12 5; then
+            if ./scripts/health-check.sh 20 5; then
               echo "=== Deploy successful ==="
 
               docker image prune -f
@@ -116,12 +116,19 @@ jobs:
               MSG=$(git log -1 --format='%s')
               ./scripts/notify.sh "Deployed $COMMIT_SHA by $AUTHOR: $MSG"
             else
-              echo "=== Health check FAILED — rolling back ==="
+              echo "=== Health check FAILED ==="
 
-              if ./scripts/rollback.sh; then
-                ./scripts/notify.sh "Deploy FAILED for $COMMIT_SHA, rolled back successfully"
+              # Only rollback if previous images have /api/health support
+              if docker run --rm "bimbo-lashes-server:previous" sh -c "test -f /usr/bin/curl" 2>/dev/null; then
+                echo "Rolling back..."
+                if ./scripts/rollback.sh; then
+                  ./scripts/notify.sh "Deploy FAILED for $COMMIT_SHA, rolled back"
+                else
+                  ./scripts/notify.sh "CRITICAL: Deploy $COMMIT_SHA failed AND rollback failed!"
+                fi
               else
-                ./scripts/notify.sh "CRITICAL: Deploy $COMMIT_SHA failed AND rollback failed!"
+                echo "SKIP rollback: previous images incompatible (first DevOps deploy)"
+                ./scripts/notify.sh "Deploy FAILED for $COMMIT_SHA. No rollback available (first deploy)."
               fi
               exit 1
             fi

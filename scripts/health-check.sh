@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-MAX_ATTEMPTS="${1:-12}"
+MAX_ATTEMPTS="${1:-20}"
 DELAY="${2:-5}"
 HEALTH_URL="http://localhost:3000/api/health"
 WEB_URL="http://localhost:8080/"
@@ -39,13 +39,21 @@ for i in $(seq 1 "$MAX_ATTEMPTS"); do
     sleep "$DELAY"
 done
 
-# Phase 2: Verify web frontend
-if curl -sf "$WEB_URL" > /dev/null 2>&1; then
-    echo "Web frontend: OK"
-else
-    echo "FAIL: Web frontend not responding"
-    exit 1
-fi
+# Phase 2: Wait for web frontend (needs time for Docker health check + container start)
+echo "Waiting for web frontend..."
+for i in $(seq 1 "$MAX_ATTEMPTS"); do
+    if curl -sf "$WEB_URL" > /dev/null 2>&1; then
+        echo "Web frontend: OK"
+        break
+    else
+        echo "Attempt $i/$MAX_ATTEMPTS: web not responding..."
+        if [[ "$i" -eq "$MAX_ATTEMPTS" ]]; then
+            echo "FAIL: Web frontend not responding"
+            exit 1
+        fi
+    fi
+    sleep "$DELAY"
+done
 
 # Phase 3: Verify Docker service states
 for SVC in server bot web; do
