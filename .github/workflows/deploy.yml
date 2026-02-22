@@ -52,9 +52,7 @@ jobs:
               git remote add origin https://github.com/anarchitektura/bimbo-lashes.git 2>/dev/null || true
               git remote set-url origin https://github.com/anarchitektura/bimbo-lashes.git
               git fetch origin main
-              git checkout -f origin/main
-              git branch -M main
-              git reset --hard origin/main
+              git checkout -B main origin/main
 
               cp /tmp/bimbo-env-backup .env 2>/dev/null || true
               rm -f /tmp/bimbo-env-backup
