@@ -65,6 +65,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/addon-info", get(handlers::client::addon_info))
         .route("/api/available-dates", get(handlers::client::available_dates_for_service))
         .route("/api/available-times", get(handlers::client::available_times))
+        .route("/api/calendar", get(handlers::client::calendar))
         .route("/api/slots/dates", get(handlers::client::available_dates_for_service)) // backward compat
         .route("/api/bookings", post(handlers::client::create_booking))
         .route("/api/bookings/my", get(handlers::client::my_bookings))

@@ -2,8 +2,9 @@ import { createResource, createSignal, For, Show } from "solid-js";
 import WebApp from "@twa-dev/sdk";
 import { api, type TimeBlock } from "../lib/api";
 import { goHome, goMyBookings } from "../lib/router";
-import { formatPrice, formatDateShort, friendlyDate, formatTime } from "../lib/utils";
+import { formatPrice, friendlyDate, formatTime } from "../lib/utils";
 import Loader from "../components/Loader";
+import Calendar from "../components/Calendar";
 
 interface Props {
   serviceId: number;
@@ -22,9 +23,6 @@ export default function BookingPage(props: Props) {
   const [loading, setLoading] = createSignal(false);
   const [error, setError] = createSignal("");
 
-  // Fetch available dates for this service
-  const [dates] = createResource(() => api.getAvailableDates(props.serviceId));
-
   // Fetch available times when date is selected
   const [timesData] = createResource(
     () => selectedDate(),
@@ -35,7 +33,6 @@ export default function BookingPage(props: Props) {
   );
 
   const selectDate = (date: string) => {
-    WebApp.HapticFeedback.selectionChanged();
     setSelectedDate(date);
     setStep("time");
   };
@@ -119,28 +116,10 @@ export default function BookingPage(props: Props) {
           <p class="text-sm font-medium mb-3" style={{ color: "var(--hint)" }}>
             📅 Выбери дату
           </p>
-          <Show when={!dates.loading} fallback={<Loader />}>
-            <Show when={dates()?.length} fallback={
-              <div class="text-center py-12" style={{ color: "var(--hint)" }}>
-                <p class="text-4xl mb-2">😿</p>
-                <p>Нет доступных дат</p>
-                <p class="text-sm mt-1">Мастер скоро откроет запись</p>
-              </div>
-            }>
-              <div class="flex flex-wrap gap-2">
-                <For each={dates()}>
-                  {(date) => (
-                    <button
-                      class="chip chip-inactive"
-                      onClick={() => selectDate(date)}
-                    >
-                      {formatDateShort(date)}
-                    </button>
-                  )}
-                </For>
-              </div>
-            </Show>
-          </Show>
+          <Calendar
+            serviceId={props.serviceId}
+            onSelect={selectDate}
+          />
         </div>
       </Show>
 

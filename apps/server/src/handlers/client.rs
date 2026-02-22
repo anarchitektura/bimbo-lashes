@@ -3,6 +3,7 @@ use axum::{
     http::{header, StatusCode},
     Json,
 };
+use chrono::Datelike;
 use std::sync::Arc;
 
 use crate::{
@@ -478,6 +479,87 @@ pub async fn cancel_booking(
     }
 
     Ok(Json(ApiResponse::success("Запись отменена")))
+}
+
+/// GET /api/calendar?year=2026&month=2&service_id=1 — calendar data with slot stats
+pub async fn calendar(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<CalendarQuery>,
+) -> Result<Json<ApiResponse<Vec<CalendarDay>>>, StatusCode> {
+    // Calculate slots_needed from service if provided
+    let slots_needed = if let Some(service_id) = query.service_id {
+        let service = sqlx::query_as::<_, Service>(
+            "SELECT id, name, description, price, duration_min, is_active, sort_order, service_type
+             FROM services WHERE id = ? AND is_active = 1"
+        )
+        .bind(service_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        match service {
+            Some(s) => (s.duration_min as f64 / 60.0).ceil() as i64,
+            None => 1,
+        }
+    } else {
+        1
+    };
+
+    // Build date range for the month
+    let year = query.year;
+    let month = query.month;
+    let days_in_month = chrono::NaiveDate::from_ymd_opt(
+        if month == 12 { year + 1 } else { year },
+        if month == 12 { 1 } else { month + 1 },
+        1,
+    )
+    .unwrap_or(chrono::NaiveDate::from_ymd_opt(year, month, 28).unwrap())
+    .pred_opt()
+    .map(|d| d.day())
+    .unwrap_or(28);
+
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+
+    let mut calendar_days = Vec::new();
+
+    for day in 1..=days_in_month {
+        let date = format!("{:04}-{:02}-{:02}", year, month, day);
+
+        // Skip past dates
+        if date < today {
+            continue;
+        }
+
+        // Get all slots for this date
+        let slots = sqlx::query_as::<_, AvailableSlot>(
+            "SELECT id, date, start_time, end_time, is_booked, booking_id
+             FROM available_slots WHERE date = ? ORDER BY start_time ASC"
+        )
+        .bind(&date)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        let total = slots.len() as i64;
+        let free = slots.iter().filter(|s| !s.is_booked).count() as i64;
+
+        let bookable = if total == 0 {
+            false
+        } else if query.service_id.is_some() {
+            has_consecutive_free_slots(&slots, slots_needed)
+        } else {
+            free > 0
+        };
+
+        calendar_days.push(CalendarDay {
+            date,
+            total,
+            free,
+            bookable,
+        });
+    }
+
+    Ok(Json(ApiResponse::success(calendar_days)))
 }
 
 // ── Helper functions ──

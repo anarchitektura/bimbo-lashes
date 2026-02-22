@@ -207,7 +207,7 @@ async fn handle_command(
                     .iter()
                     .map(|b| {
                         vec![InlineKeyboardButton::callback(
-                            format!("❌ Отменить {} ({})", b.service_name, &b.date),
+                            format!("❌ Отменить {} ({})", b.service_name, format_date_ru(&b.date)),
                             format!("cancel:{}", b.id),
                         )]
                     })
@@ -779,15 +779,9 @@ async fn send_reminders(bot: Bot, pool: sqlx::SqlitePool) {
 // ── Date formatting helper ──
 
 fn format_date_ru(date_str: &str) -> String {
-    let months = [
-        "января", "февраля", "марта", "апреля", "мая", "июня",
-        "июля", "августа", "сентября", "октября", "ноября", "декабря",
-    ];
     let parts: Vec<&str> = date_str.split('-').collect();
     if parts.len() != 3 {
         return date_str.to_string();
     }
-    let day: u32 = parts[2].parse().unwrap_or(0);
-    let month: usize = parts[1].parse::<usize>().unwrap_or(1) - 1;
-    format!("{} {}", day, months.get(month).unwrap_or(&"???"))
+    format!("{}.{}", parts[2], parts[1]) // "26.02"
 }

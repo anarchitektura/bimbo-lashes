@@ -60,6 +60,13 @@ export interface AvailableTimes {
   times: TimeBlock[];
 }
 
+export interface CalendarDay {
+  date: string;
+  total: number;
+  free: number;
+  bookable: boolean;
+}
+
 export interface AddonInfo {
   name: string;
   price: number;
@@ -91,6 +98,12 @@ export const api = {
 
   getAvailableDates: (serviceId: number) =>
     request<string[]>(`/api/available-dates?service_id=${serviceId}`),
+
+  getCalendar: (year: number, month: number, serviceId?: number) => {
+    const params = new URLSearchParams({ year: String(year), month: String(month) });
+    if (serviceId) params.set("service_id", String(serviceId));
+    return request<CalendarDay[]>(`/api/calendar?${params}`);
+  },
 
   getAvailableTimes: (date: string, serviceId: number) =>
     request<AvailableTimes>(`/api/available-times?date=${date}&service_id=${serviceId}`),

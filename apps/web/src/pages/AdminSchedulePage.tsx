@@ -3,16 +3,11 @@ import WebApp from "@twa-dev/sdk";
 import { adminApi, type Slot } from "../lib/api";
 import { formatDateShort, formatTime, friendlyDate } from "../lib/utils";
 import Loader from "../components/Loader";
+import Calendar from "../components/Calendar";
 
 export default function AdminSchedulePage() {
-  // Generate next 14 days
-  const dates = Array.from({ length: 14 }, (_, i) => {
-    const d = new Date();
-    d.setDate(d.getDate() + i);
-    return d.toISOString().split("T")[0];
-  });
-
-  const [selectedDate, setSelectedDate] = createSignal(dates[0]);
+  const todayStr = new Date().toISOString().split("T")[0];
+  const [selectedDate, setSelectedDate] = createSignal(todayStr);
   const [slots, { refetch }] = createResource(
     () => selectedDate(),
     (date) => adminApi.getSlots(date)
@@ -62,7 +57,7 @@ export default function AdminSchedulePage() {
       return;
     }
     WebApp.showConfirm(
-      `Удалить все свободные слоты (${freeSlots.length} шт.) на ${formatDateShort(selectedDate())}?`,
+      `Удалить все свободные слоты (${freeSlots.length} шт.) на ${friendlyDate(selectedDate())}?`,
       async (ok) => {
         if (!ok) return;
         for (const slot of freeSlots) {
@@ -89,23 +84,13 @@ export default function AdminSchedulePage() {
         </p>
       </div>
 
-      {/* Date selector */}
-      <div class="px-4 py-3 flex gap-2 overflow-x-auto">
-        <For each={dates}>
-          {(date) => (
-            <button
-              class={`chip whitespace-nowrap ${
-                selectedDate() === date ? "chip-active" : "chip-inactive"
-              }`}
-              onClick={() => {
-                WebApp.HapticFeedback.selectionChanged();
-                setSelectedDate(date);
-              }}
-            >
-              {formatDateShort(date)}
-            </button>
-          )}
-        </For>
+      {/* Calendar date selector */}
+      <div class="px-4 py-2">
+        <Calendar
+          onSelect={setSelectedDate}
+          selectedDate={selectedDate()}
+          adminMode={true}
+        />
       </div>
 
       {/* Stats */}
@@ -139,7 +124,7 @@ export default function AdminSchedulePage() {
       {/* Actions — 3 buttons */}
       <div class="px-4 mb-2">
         <p class="text-sm font-medium mb-2" style={{ color: "var(--hint)" }}>
-          Управление
+          {friendlyDate(selectedDate())} — управление
         </p>
         <div class="flex gap-2 flex-wrap">
           <button
@@ -170,7 +155,7 @@ export default function AdminSchedulePage() {
       <div class="px-4">
         <div class="flex justify-between items-center mb-2">
           <p class="text-sm font-medium" style={{ color: "var(--hint)" }}>
-            Слоты на {formatDateShort(selectedDate())}
+            Слоты на {friendlyDate(selectedDate())}
           </p>
           <Show when={freeCount() > 1}>
             <button
@@ -194,7 +179,7 @@ export default function AdminSchedulePage() {
                 <p class="text-3xl mb-2">📭</p>
                 <p>Нет слотов на эту дату</p>
                 <p class="text-xs mt-1">
-                  Нажми «День» чтобы создать 8 слотов
+                  Нажми «День» чтобы создать слоты
                 </p>
               </div>
             }

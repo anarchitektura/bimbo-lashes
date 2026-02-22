@@ -91,6 +91,21 @@ pub struct OpenDayRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct CalendarQuery {
+    pub year: i32,
+    pub month: u32,
+    pub service_id: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CalendarDay {
+    pub date: String,
+    pub total: i64,
+    pub free: i64,
+    pub bookable: bool,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct SlotsQuery {
     pub date: String,
 }
