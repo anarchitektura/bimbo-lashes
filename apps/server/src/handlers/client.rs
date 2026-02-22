@@ -161,6 +161,7 @@ pub async fn available_times(
 
     // Find all valid time blocks (groups of N consecutive free slots)
     let mut time_blocks = Vec::new();
+    let has_bookings = slots.iter().any(|s| s.is_booked);
 
     for i in 0..slots.len() {
         if slots[i].is_booked {
@@ -196,17 +197,20 @@ pub async fn available_times(
             let block_end = &slots[i + slots_needed - 1].end_time;
 
             if is_tight {
-                // Tight mode: only allow if adjacent to booked slot or workday edge
-                let adjacent = is_adjacent_to_booked_or_edge(
-                    block_start,
-                    block_end,
-                    &slots,
-                );
-                if adjacent {
+                if !has_bookings {
+                    // Tight mode but no bookings yet — show all (no reference point to optimize)
                     time_blocks.push(TimeBlock {
                         start_time: block_start.clone(),
                         end_time: block_end.clone(),
                     });
+                } else {
+                    // Tight mode with bookings — only adjacent to booked slots (no edges)
+                    if is_strictly_adjacent_to_booked(block_start, block_end, &slots) {
+                        time_blocks.push(TimeBlock {
+                            start_time: block_start.clone(),
+                            end_time: block_end.clone(),
+                        });
+                    }
                 }
             } else {
                 // Free mode: all valid blocks
@@ -522,18 +526,12 @@ fn has_consecutive_free_slots(slots: &[AvailableSlot], needed: i64) -> bool {
     false
 }
 
-/// Check if a time block is adjacent to a booked slot or workday edge
-fn is_adjacent_to_booked_or_edge(
+/// Check if a time block is strictly adjacent to a booked slot (no edge check)
+fn is_strictly_adjacent_to_booked(
     block_start: &str,
     block_end: &str,
     all_slots: &[AvailableSlot],
 ) -> bool {
-    // Edge check: starts at 12:00 or ends at 20:00
-    if block_start == "12:00" || block_end == "20:00" {
-        return true;
-    }
-
-    // Check if adjacent to any booked slot
     for slot in all_slots {
         if !slot.is_booked {
             continue;

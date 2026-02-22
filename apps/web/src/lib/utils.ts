@@ -3,7 +3,7 @@ export function formatPrice(price: number): string {
   return price.toLocaleString("ru-RU") + " ₽";
 }
 
-/** Format date: "2026-02-26" → "26 февраля" */
+/** Format date full: "2026-02-26" → "26.02 (26 февраля)" */
 export function formatDate(dateStr: string): string {
   const months = [
     "января", "февраля", "марта", "апреля", "мая", "июня",
@@ -12,21 +12,16 @@ export function formatDate(dateStr: string): string {
   const [, m, d] = dateStr.split("-");
   const month = months[parseInt(m, 10) - 1];
   const day = parseInt(d, 10);
-  return `${day} ${month}`;
+  return `${d}.${m} (${day} ${month})`;
 }
 
-/** Format date with weekday: "2026-02-26" → "чт, 26 фев" */
+/** Format date short for chips: "2026-02-26" → "26.02, чт" */
 export function formatDateShort(dateStr: string): string {
   const days = ["вс", "пн", "вт", "ср", "чт", "пт", "сб"];
-  const monthsShort = [
-    "янв", "фев", "мар", "апр", "мая", "июн",
-    "июл", "авг", "сен", "окт", "ноя", "дек",
-  ];
+  const [, m, d] = dateStr.split("-");
   const date = new Date(dateStr + "T00:00:00");
   const wd = days[date.getDay()];
-  const d = date.getDate();
-  const m = monthsShort[date.getMonth()];
-  return `${wd}, ${d} ${m}`;
+  return `${d}.${m}, ${wd}`;
 }
 
 /** Format time range: "14:00" → "14:00" */

@@ -143,10 +143,10 @@ export const adminApi = {
       body: JSON.stringify({ date, slots }),
     }),
 
-  openDay: (date: string) =>
+  openDay: (date: string, startHour?: number, endHour?: number) =>
     request<Slot[]>("/api/admin/openday", {
       method: "POST",
-      body: JSON.stringify({ date }),
+      body: JSON.stringify({ date, start_hour: startHour, end_hour: endHour }),
     }),
 
   deleteSlot: (id: number) =>

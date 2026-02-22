@@ -86,6 +86,8 @@ pub struct AddonInfo {
 #[derive(Debug, Deserialize)]
 pub struct OpenDayRequest {
     pub date: String,
+    pub start_hour: Option<u32>,
+    pub end_hour: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -152,7 +152,7 @@ export default function BookingPage(props: Props) {
           </p>
           <div class="flex items-center gap-2 mb-3">
             <p class="text-xs" style={{ color: "var(--hint)" }}>
-              {friendlyDate(selectedDate())}, {formatDateShort(selectedDate())}
+              {friendlyDate(selectedDate())}
             </p>
             <Show when={timesData()?.mode === "tight"}>
               <span

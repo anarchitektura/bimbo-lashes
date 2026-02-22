@@ -212,8 +212,18 @@ pub async fn open_day(
         ));
     }
 
-    // Create 8 one-hour slots: 12:00-13:00, ..., 19:00-20:00
-    for hour in 12..20 {
+    // Create one-hour slots for the requested range (default: 12:00–20:00)
+    let start_h = body.start_hour.unwrap_or(12).max(0).min(23);
+    let end_h = body.end_hour.unwrap_or(20).max(1).min(24);
+
+    if start_h >= end_h {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::error("start_hour должен быть меньше end_hour")),
+        ));
+    }
+
+    for hour in start_h..end_h {
         let start = format!("{:02}:00", hour);
         let end = format!("{:02}:00", hour + 1);
 
