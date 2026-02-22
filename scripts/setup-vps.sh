@@ -7,7 +7,7 @@ set -euo pipefail
 
 DOMAIN="${1:?Usage: setup-vps.sh <domain>}"
 PROJECT_DIR="/opt/bimbo-lashes"
-REPO_URL="https://github.com/OWNER/REPO.git"
+REPO_URL="https://github.com/anarchitektura/bimbo-lashes.git"
 
 echo "=== Bimbo Lashes VPS Setup ==="
 echo "Domain: $DOMAIN"
