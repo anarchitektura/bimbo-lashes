@@ -42,28 +42,24 @@ jobs:
             # Mark directory as safe for git
             git config --global --add safe.directory /opt/bimbo-lashes
 
-            # Phase 0: Initialize git repo if needed (first deploy)
-            if [[ ! -d /opt/bimbo-lashes/.git ]]; then
-              echo "--- Phase 0: First-time git setup ---"
-              cd /opt/bimbo-lashes
-
-              # Save .env before clone
+            # Phase 0: Ensure git repo is connected to GitHub
+            cd /opt/bimbo-lashes
+            if ! git remote get-url origin > /dev/null 2>&1; then
+              echo "--- Phase 0: Connecting to GitHub ---"
               cp .env /tmp/bimbo-env-backup 2>/dev/null || true
 
-              # Init git and pull from GitHub
-              git init
-              git remote add origin https://github.com/anarchitektura/bimbo-lashes.git
+              git init 2>/dev/null || true
+              git remote add origin https://github.com/anarchitektura/bimbo-lashes.git 2>/dev/null || true
+              git remote set-url origin https://github.com/anarchitektura/bimbo-lashes.git
               git fetch origin main
               git checkout -f origin/main
               git branch -M main
               git reset --hard origin/main
 
-              # Restore .env
               cp /tmp/bimbo-env-backup .env 2>/dev/null || true
               rm -f /tmp/bimbo-env-backup
-
               chmod +x scripts/*.sh
-              echo "Git repo initialized"
+              echo "Git repo connected"
             fi
 
             cd /opt/bimbo-lashes
