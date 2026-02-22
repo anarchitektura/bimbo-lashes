@@ -3,6 +3,12 @@ WORKDIR /build
 COPY apps/web/package.json apps/web/package-lock.json* ./
 RUN npm install
 COPY apps/web .
+
+ARG VITE_ADMIN_TG_ID
+ARG VITE_API_URL
+ENV VITE_ADMIN_TG_ID=$VITE_ADMIN_TG_ID
+ENV VITE_API_URL=$VITE_API_URL
+
 RUN npm run build
 
 FROM nginx:alpine

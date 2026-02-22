@@ -87,6 +87,24 @@ pub async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         tracing::info!("Applied migration: 003_new_catalog");
     }
 
+    // 004: Delete old inactive services (no booking history)
+    let cleanup_applied: bool = sqlx::query_scalar(
+        "SELECT COUNT(*) > 0 FROM _migrations WHERE name = '004_delete_old_services'"
+    )
+    .fetch_one(pool)
+    .await?;
+
+    if !cleanup_applied {
+        sqlx::query("DELETE FROM services WHERE is_active = 0")
+            .execute(pool)
+            .await
+            .ok();
+        sqlx::query("INSERT INTO _migrations (name) VALUES ('004_delete_old_services')")
+            .execute(pool)
+            .await?;
+        tracing::info!("Applied migration: 004_delete_old_services");
+    }
+
     tracing::info!("Database migrations up to date");
     Ok(())
 }

@@ -45,6 +45,9 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      args:
+        VITE_ADMIN_TG_ID: ${ADMIN_TG_ID}
+        VITE_API_URL: ${VITE_API_URL:-}
     ports:
       - "8080:80"
     depends_on:

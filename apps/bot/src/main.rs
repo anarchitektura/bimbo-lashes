@@ -19,6 +19,10 @@ enum Command {
     Today,
     #[command(description = "Записи на завтра (для мастера)")]
     Tomorrow,
+    #[command(description = "Добавить слоты: /addslots 2026-02-25 10:00 12:00 14:00 16:00")]
+    AddSlots(String),
+    #[command(description = "Расписание на дату: /schedule 2026-02-25")]
+    Schedule(String),
     #[command(description = "Помощь")]
     Help,
 }
@@ -241,6 +245,148 @@ async fn handle_command(
             send_day_bookings(&bot, msg.chat.id, &state.pool, &tomorrow, "Завтра").await?;
         }
 
+        Command::AddSlots(args) => {
+            let user_id = msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0);
+            if user_id != state.admin_tg_id {
+                bot.send_message(msg.chat.id, "⛔ Только для мастера").await?;
+                return Ok(());
+            }
+
+            let parts: Vec<&str> = args.split_whitespace().collect();
+            if parts.len() < 2 {
+                bot.send_message(
+                    msg.chat.id,
+                    "📝 <b>Формат:</b>\n<code>/addslots 2026-02-25 10:00 12:00 14:00 16:00</code>\n\n\
+                     Первый аргумент — дата, остальные — время начала слотов.\n\
+                     Длительность слота = 2 часа.",
+                )
+                .parse_mode(ParseMode::Html)
+                .await?;
+                return Ok(());
+            }
+
+            let date = parts[0];
+            // Validate date format
+            if chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").is_err() {
+                bot.send_message(msg.chat.id, "❌ Неверный формат даты. Используй YYYY-MM-DD")
+                    .await?;
+                return Ok(());
+            }
+
+            let times = &parts[1..];
+            let mut added = 0;
+            let mut errors = Vec::new();
+
+            for time in times {
+                // Validate time format
+                if time.len() != 5 || !time.contains(':') {
+                    errors.push(format!("{} — неверный формат", time));
+                    continue;
+                }
+
+                let start = *time;
+                // Calculate end time (+ 2 hours)
+                let hour: u32 = start[..2].parse().unwrap_or(99);
+                let min: u32 = start[3..].parse().unwrap_or(99);
+                if hour > 23 || min > 59 {
+                    errors.push(format!("{} — неверное время", time));
+                    continue;
+                }
+                let end_hour = hour + 2;
+                let end_time = format!("{:02}:{:02}", end_hour.min(23), min);
+
+                let result = sqlx::query(
+                    "INSERT INTO available_slots (date, start_time, end_time) VALUES (?, ?, ?)",
+                )
+                .bind(date)
+                .bind(start)
+                .bind(&end_time)
+                .execute(&state.pool)
+                .await;
+
+                if result.is_ok() {
+                    added += 1;
+                } else {
+                    errors.push(format!("{} — ошибка БД", time));
+                }
+            }
+
+            let mut reply = format!("✅ Добавлено {} слотов на {}", added, format_date_ru(date));
+            if !errors.is_empty() {
+                reply.push_str(&format!("\n\n⚠️ Ошибки:\n{}", errors.join("\n")));
+            }
+
+            bot.send_message(msg.chat.id, reply).await?;
+        }
+
+        Command::Schedule(args) => {
+            let user_id = msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0);
+            if user_id != state.admin_tg_id {
+                bot.send_message(msg.chat.id, "⛔ Только для мастера").await?;
+                return Ok(());
+            }
+
+            let date = args.trim();
+            let date = if date.is_empty() {
+                chrono::Local::now().format("%Y-%m-%d").to_string()
+            } else {
+                if chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").is_err() {
+                    bot.send_message(msg.chat.id, "❌ Формат: /schedule 2026-02-25")
+                        .await?;
+                    return Ok(());
+                }
+                date.to_string()
+            };
+
+            #[derive(sqlx::FromRow)]
+            struct SlotInfo {
+                start_time: String,
+                end_time: String,
+                is_booked: bool,
+            }
+
+            let slots = sqlx::query_as::<_, SlotInfo>(
+                "SELECT start_time, end_time, is_booked FROM available_slots
+                 WHERE date = ? ORDER BY start_time ASC",
+            )
+            .bind(&date)
+            .fetch_all(&state.pool)
+            .await?;
+
+            if slots.is_empty() {
+                bot.send_message(
+                    msg.chat.id,
+                    format!("📅 {} — слотов нет\n\nДобавь: <code>/addslots {} 10:00 12:00 14:00</code>",
+                        format_date_ru(&date), date),
+                )
+                .parse_mode(ParseMode::Html)
+                .await?;
+                return Ok(());
+            }
+
+            let free = slots.iter().filter(|s| !s.is_booked).count();
+            let booked = slots.iter().filter(|s| s.is_booked).count();
+
+            let mut text = format!(
+                "📅 <b>{}</b>\n🟢 Свободно: {} · 🟠 Занято: {}\n\n",
+                format_date_ru(&date), free, booked
+            );
+
+            for s in &slots {
+                let icon = if s.is_booked { "🟠" } else { "🟢" };
+                text.push_str(&format!(
+                    "{} {} — {}\n",
+                    icon,
+                    &s.start_time[..5],
+                    &s.end_time[..5],
+                ));
+            }
+
+            bot.send_message(msg.chat.id, text)
+                .parse_mode(ParseMode::Html)
+                .await?;
+        }
+
         Command::Help => {
             let is_admin = msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0)
                 == state.admin_tg_id;
@@ -255,7 +401,12 @@ async fn handle_command(
                 text.push_str(
                     "\n\n<b>🔧 Команды мастера:</b>\n\
                      /today — записи на сегодня\n\
-                     /tomorrow — записи на завтра",
+                     /tomorrow — записи на завтра\n\
+                     /schedule — расписание на дату\n\
+                     /addslots — добавить слоты\n\n\
+                     <b>Примеры:</b>\n\
+                     <code>/addslots 2026-02-25 10:00 12:00 14:00</code>\n\
+                     <code>/schedule 2026-02-25</code>",
                 );
             }
 
