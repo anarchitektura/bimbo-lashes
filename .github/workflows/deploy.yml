@@ -21,6 +21,7 @@ jobs:
           echo "sha_short=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
 
       - name: Deploy via SSH
+        id: ssh_deploy
         uses: appleboy/ssh-action@v1
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
@@ -96,3 +97,11 @@ jobs:
               fi
               exit 1
             fi
+
+      - name: Notify on SSH failure
+        if: failure() && steps.ssh_deploy.outcome == 'failure'
+        run: |
+          curl -sf -X POST "https://api.telegram.org/bot${{ secrets.BOT_TOKEN }}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d '{"chat_id": ${{ secrets.ADMIN_TG_ID }}, "text": "Deploy FAILED: SSH connection error (${{ steps.commit.outputs.sha_short }}). Check GitHub Actions logs.", "parse_mode": "HTML"}' \
+            || echo "WARNING: Could not send Telegram notification"
