@@ -1,0 +1,18 @@
+{domain} {
+    reverse_proxy localhost:8080
+
+    header {
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "SAMEORIGIN"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        -Server
+    }
+
+    log {
+        output file /var/log/caddy/bimbo-lashes.log {
+            roll_size 10mb
+            roll_keep 5
+        }
+    }
+}

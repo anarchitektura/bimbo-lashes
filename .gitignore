@@ -1,0 +1,23 @@
+# Rust
+target/
+*.db
+*.db-shm
+*.db-wal
+
+# Backups
+backups/
+
+# Node
+node_modules/
+dist/
+
+# Environment
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

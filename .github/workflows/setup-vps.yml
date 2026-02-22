@@ -1,0 +1,56 @@
+name: Setup VPS
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Domain name (e.g., bimbo-lashes.ru)'
+        required: true
+        type: string
+
+jobs:
+  setup:
+    name: Provision VPS
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Upload and run setup script
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          command_timeout: 25m
+          script: |
+            TMPDIR=$(mktemp -d)
+
+            curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/setup-vps.sh" \
+              -o "$TMPDIR/setup-vps.sh"
+            chmod +x "$TMPDIR/setup-vps.sh"
+
+            # Set repo URL
+            sed -i "s|REPO_URL=\"https://github.com/OWNER/REPO.git\"|REPO_URL=\"https://github.com/${{ github.repository }}.git\"|" "$TMPDIR/setup-vps.sh"
+
+            "$TMPDIR/setup-vps.sh" "${{ inputs.domain }}"
+
+            rm -rf "$TMPDIR"
+
+      - name: Verify setup
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            echo "=== VPS Status ==="
+            echo "Docker: $(docker --version)"
+            echo "Caddy: $(caddy version)"
+            echo "UFW:"
+            ufw status | grep -E "22|80|443"
+            echo "Swap: $(free -h | grep Swap | awk '{print $2}')"
+            echo "Disk: $(df -h /opt/bimbo-lashes | tail -1 | awk '{print $4 " free"}')"
+            echo "Services:"
+            cd /opt/bimbo-lashes && docker compose ps 2>/dev/null || echo "Not started yet (need .env)"

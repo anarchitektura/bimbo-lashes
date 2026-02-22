@@ -1,0 +1,37 @@
+name: Daily Backup
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  backup:
+    name: SQLite Backup
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Run backup via SSH
+        uses: appleboy/ssh-action@v1
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          ADMIN_TG_ID: ${{ secrets.ADMIN_TG_ID }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          command_timeout: 5m
+          envs: BOT_TOKEN,ADMIN_TG_ID
+          script: |
+            cd /opt/bimbo-lashes
+            export BOT_TOKEN ADMIN_TG_ID
+
+            # Check disk space first
+            DISK_USAGE=$(df /opt/bimbo-lashes | tail -1 | awk '{print $5}' | tr -d '%')
+            if [[ "$DISK_USAGE" -gt 90 ]]; then
+              ./scripts/notify.sh "Disk usage at ${DISK_USAGE}%! Backup skipped."
+              exit 1
+            fi
+
+            ./scripts/backup.sh

@@ -1,0 +1,98 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Get commit info
+        id: commit
+        run: |
+          echo "sha_short=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          ADMIN_TG_ID: ${{ secrets.ADMIN_TG_ID }}
+          COMMIT_SHA: ${{ steps.commit.outputs.sha_short }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          command_timeout: 25m
+          envs: BOT_TOKEN,ADMIN_TG_ID,COMMIT_SHA
+          script: |
+            set -euo pipefail
+            cd /opt/bimbo-lashes
+
+            echo "=== Deploy starting: $COMMIT_SHA ==="
+
+            # Phase 1: Pre-deploy backup
+            echo "--- Phase 1: Pre-deploy backup ---"
+            export BOT_TOKEN ADMIN_TG_ID
+            ./scripts/backup.sh || echo "WARNING: Pre-deploy backup failed (continuing)"
+
+            # Phase 2: Tag current images as :previous (for rollback)
+            echo "--- Phase 2: Tag previous images ---"
+            for SVC in server bot web; do
+              IMG="bimbo-lashes-${SVC}"
+              if docker image inspect "${IMG}:latest" > /dev/null 2>&1; then
+                docker tag "${IMG}:latest" "${IMG}:previous"
+                echo "Tagged ${IMG}:previous"
+              fi
+            done
+
+            # Phase 3: Pull & build
+            echo "--- Phase 3: Pull & build ---"
+            git pull origin main
+
+            # Update Caddyfile if changed
+            if [[ -f /etc/caddy/Caddyfile ]]; then
+              DOMAIN=$(grep -oP '^\S+' /etc/caddy/Caddyfile | head -1)
+              if [[ -n "$DOMAIN" ]] && [[ "$DOMAIN" != "{domain}" ]]; then
+                sed "s/{domain}/$DOMAIN/g" infra/Caddyfile > /etc/caddy/Caddyfile
+                systemctl reload caddy || true
+                echo "Caddyfile updated"
+              fi
+            fi
+
+            docker compose build
+
+            # Phase 4: Deploy
+            echo "--- Phase 4: Deploy ---"
+            docker compose up -d
+
+            # Phase 5: Health check
+            echo "--- Phase 5: Health check ---"
+            if ./scripts/health-check.sh 12 5; then
+              echo "=== Deploy successful ==="
+
+              docker image prune -f
+              for SVC in server bot web; do
+                docker rmi "bimbo-lashes-${SVC}:previous" 2>/dev/null || true
+              done
+
+              AUTHOR=$(git log -1 --format='%an')
+              MSG=$(git log -1 --format='%s')
+              ./scripts/notify.sh "Deployed $COMMIT_SHA by $AUTHOR: $MSG"
+            else
+              echo "=== Health check FAILED — rolling back ==="
+
+              if ./scripts/rollback.sh; then
+                ./scripts/notify.sh "Deploy FAILED for $COMMIT_SHA, rolled back successfully"
+              else
+                ./scripts/notify.sh "CRITICAL: Deploy $COMMIT_SHA failed AND rollback failed!"
+              fi
+              exit 1
+            fi

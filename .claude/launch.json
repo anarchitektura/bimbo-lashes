@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "web-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 5173
+    },
+    {
+      "name": "server",
+      "runtimeExecutable": "cargo",
+      "runtimeArgs": ["run", "--package", "bimbo-lashes-server"],
+      "port": 3000
+    },
+    {
+      "name": "bot",
+      "runtimeExecutable": "cargo",
+      "runtimeArgs": ["run", "--package", "bimbo-lashes-bot"],
+      "port": 8443
+    }
+  ]
+}

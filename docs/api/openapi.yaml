@@ -1,0 +1,411 @@
+openapi: 3.1.0
+info:
+  title: Bimbo Lashes API
+  version: 1.0.0
+  description: API для Telegram Mini App записи к мастеру по ресницам
+
+servers:
+  - url: http://localhost:3000
+    description: Local dev
+  - url: https://your-domain.com
+    description: Production
+
+security:
+  - telegramAuth: []
+
+components:
+  securitySchemes:
+    telegramAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: "tma <initData>"
+      description: "Telegram Mini App initData. Header: Authorization: tma <initData>"
+
+  schemas:
+    Service:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+          example: "2D"
+        description:
+          type: string
+          example: "Объёмное наращивание 2D"
+        price:
+          type: integer
+          description: "Цена в рублях"
+          example: 3000
+        duration_min:
+          type: integer
+          description: "Длительность в минутах"
+          example: 150
+        is_active:
+          type: boolean
+        sort_order:
+          type: integer
+
+    Slot:
+      type: object
+      properties:
+        id:
+          type: integer
+        date:
+          type: string
+          format: date
+          example: "2026-02-26"
+        start_time:
+          type: string
+          example: "14:00"
+        end_time:
+          type: string
+          example: "16:00"
+        is_booked:
+          type: boolean
+
+    BookingDetail:
+      type: object
+      properties:
+        id:
+          type: integer
+        service_name:
+          type: string
+        service_price:
+          type: integer
+        date:
+          type: string
+          format: date
+        start_time:
+          type: string
+        end_time:
+          type: string
+        client_tg_id:
+          type: integer
+        client_username:
+          type: string
+          nullable: true
+        client_first_name:
+          type: string
+        status:
+          type: string
+          enum: [confirmed, cancelled]
+        created_at:
+          type: string
+
+    ApiResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        data:
+          description: "Response payload (type varies per endpoint)"
+        error:
+          type: string
+          nullable: true
+
+    CreateBookingRequest:
+      type: object
+      required: [service_id, slot_id]
+      properties:
+        service_id:
+          type: integer
+        slot_id:
+          type: integer
+
+    CreateServiceRequest:
+      type: object
+      required: [name, price, duration_min]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        price:
+          type: integer
+        duration_min:
+          type: integer
+        sort_order:
+          type: integer
+
+    UpdateServiceRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        price:
+          type: integer
+        duration_min:
+          type: integer
+        is_active:
+          type: boolean
+        sort_order:
+          type: integer
+
+    CreateSlotsRequest:
+      type: object
+      required: [date, slots]
+      properties:
+        date:
+          type: string
+          format: date
+        slots:
+          type: array
+          items:
+            type: object
+            required: [start_time, end_time]
+            properties:
+              start_time:
+                type: string
+                example: "09:00"
+              end_time:
+                type: string
+                example: "11:00"
+
+paths:
+  # ── Client ──
+
+  /api/services:
+    get:
+      summary: Список активных услуг
+      tags: [Client]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Service"
+
+  /api/slots/dates:
+    get:
+      summary: Даты с доступными слотами
+      tags: [Client]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        type: array
+                        items:
+                          type: string
+                          format: date
+
+  /api/slots:
+    get:
+      summary: Свободные слоты на дату
+      tags: [Client]
+      parameters:
+        - name: date
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Slot"
+
+  /api/bookings:
+    post:
+      summary: Создать запись
+      tags: [Client]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBookingRequest"
+      responses:
+        "200":
+          description: Запись создана
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        $ref: "#/components/schemas/BookingDetail"
+        "409":
+          description: Слот уже занят
+
+  /api/bookings/my:
+    get:
+      summary: Мои записи
+      tags: [Client]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/BookingDetail"
+
+  /api/bookings/{id}:
+    delete:
+      summary: Отменить запись
+      tags: [Client]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Запись отменена
+        "404":
+          description: Запись не найдена
+
+  # ── Admin ──
+
+  /api/admin/services:
+    get:
+      summary: Все услуги (включая неактивные)
+      tags: [Admin]
+      responses:
+        "200":
+          description: OK
+    post:
+      summary: Создать услугу
+      tags: [Admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateServiceRequest"
+      responses:
+        "200":
+          description: Услуга создана
+
+  /api/admin/services/{id}:
+    put:
+      summary: Обновить услугу
+      tags: [Admin]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateServiceRequest"
+      responses:
+        "200":
+          description: Услуга обновлена
+
+  /api/admin/slots:
+    get:
+      summary: Все слоты на дату (включая занятые)
+      tags: [Admin]
+      parameters:
+        - name: date
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: OK
+    post:
+      summary: Создать слоты на дату
+      tags: [Admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSlotsRequest"
+      responses:
+        "200":
+          description: Слоты созданы
+
+  /api/admin/slots/{id}:
+    delete:
+      summary: Удалить слот (только свободный)
+      tags: [Admin]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Слот удалён
+        "409":
+          description: Нельзя удалить занятый слот
+
+  /api/admin/bookings:
+    get:
+      summary: Список записей
+      tags: [Admin]
+      parameters:
+        - name: date
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: OK
+
+  /api/admin/bookings/{id}/cancel:
+    post:
+      summary: Отменить запись (админ)
+      tags: [Admin]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Запись отменена, клиент уведомлён
