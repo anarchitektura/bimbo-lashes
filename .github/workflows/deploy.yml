@@ -39,6 +39,9 @@ jobs:
 
             echo "=== Deploy starting: $COMMIT_SHA ==="
 
+            # Mark directory as safe for git
+            git config --global --add safe.directory /opt/bimbo-lashes
+
             # Phase 0: Initialize git repo if needed (first deploy)
             if [[ ! -d /opt/bimbo-lashes/.git ]]; then
               echo "--- Phase 0: First-time git setup ---"
