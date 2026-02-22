@@ -59,6 +59,34 @@ pub async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         tracing::info!("Applied migration: 002_dedup_services (removed duplicate services)");
     }
 
+    // 003: Replace services with new catalog
+    let catalog_applied: bool = sqlx::query_scalar(
+        "SELECT COUNT(*) > 0 FROM _migrations WHERE name = '003_new_catalog'"
+    )
+    .fetch_one(pool)
+    .await?;
+
+    if !catalog_applied {
+        // Deactivate all old services
+        sqlx::query("UPDATE services SET is_active = 0").execute(pool).await.ok();
+
+        // Insert new catalog
+        sqlx::query(
+            "INSERT INTO services (name, description, price, duration_min, sort_order, is_active) VALUES
+                ('Наращивание ресниц', 'Любой объём', 2500, 120, 1, 1),
+                ('Наращивание нижних', 'Наращивание только нижних ресниц', 500, 20, 2, 1),
+                ('Коррекция', 'Коррекция наращивания', 1500, 60, 3, 1)"
+        )
+        .execute(pool)
+        .await
+        .ok();
+
+        sqlx::query("INSERT INTO _migrations (name) VALUES ('003_new_catalog')")
+            .execute(pool)
+            .await?;
+        tracing::info!("Applied migration: 003_new_catalog");
+    }
+
     tracing::info!("Database migrations up to date");
     Ok(())
 }
