@@ -54,10 +54,11 @@ export default function HomePage() {
     <div class="animate-fade-in">
       {/* Header */}
       <div class="px-4 pt-6 pb-4 text-center">
-        <h1 class="text-2xl font-bold" style={{ color: "var(--text)" }}>
-          ✨ Bimbo Lashes ✨
-        </h1>
-        <p class="mt-1 text-sm" style={{ color: "var(--hint)" }}>
+        <div class="sparkle-container inline-block">
+          <h1 class="brand-logo">Bimbo Lashes</h1>
+        </div>
+        <div class="brand-underline" />
+        <p class="mt-2 text-sm" style={{ color: "var(--hint)" }}>
           Выбери услугу и запишись
         </p>
       </div>

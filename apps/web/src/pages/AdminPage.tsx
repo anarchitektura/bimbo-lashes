@@ -118,19 +118,13 @@ export default function AdminPage() {
       {/* Stats */}
       <Show when={activeBookings()?.length}>
         <div class="px-4 mb-3 flex gap-3">
-          <div
-            class="flex-1 rounded-xl p-3 text-center"
-            style={{ background: "var(--secondary-bg)" }}
-          >
+          <div class="flex-1 stat-box">
             <div class="text-lg font-bold" style={{ color: "var(--btn)" }}>
               {activeBookings()?.length || 0}
             </div>
             <div class="text-xs" style={{ color: "var(--hint)" }}>записей</div>
           </div>
-          <div
-            class="flex-1 rounded-xl p-3 text-center"
-            style={{ background: "var(--secondary-bg)" }}
-          >
+          <div class="flex-1 stat-box">
             <div class="text-lg font-bold" style={{ color: "#4caf50" }}>
               {formatPrice(totalRevenue())}
             </div>

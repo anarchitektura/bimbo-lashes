@@ -97,10 +97,7 @@ export default function AdminSchedulePage() {
       {/* Stats */}
       <Show when={hasSlots()}>
         <div class="px-4 mb-3 flex gap-3">
-          <div
-            class="flex-1 rounded-xl p-3 text-center"
-            style={{ background: "var(--secondary-bg)" }}
-          >
+          <div class="flex-1 stat-box">
             <div class="text-lg font-bold" style={{ color: "var(--btn)" }}>
               {freeCount()}
             </div>
@@ -108,10 +105,7 @@ export default function AdminSchedulePage() {
               свободно
             </div>
           </div>
-          <div
-            class="flex-1 rounded-xl p-3 text-center"
-            style={{ background: "var(--secondary-bg)" }}
-          >
+          <div class="flex-1 stat-box">
             <div class="text-lg font-bold" style={{ color: "#e65100" }}>
               {bookedCount()}
             </div>
