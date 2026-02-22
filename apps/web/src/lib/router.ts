@@ -2,7 +2,7 @@ import { createSignal } from "solid-js";
 
 export type Route =
   | { page: "home" }
-  | { page: "booking"; serviceId: number; serviceName: string; servicePrice: number }
+  | { page: "booking"; serviceId: number; serviceName: string; servicePrice: number; withLowerLashes: boolean }
   | { page: "my-bookings" }
   | { page: "admin" }
   | { page: "admin-schedule" }
@@ -16,8 +16,8 @@ export function goHome() {
   setRoute({ page: "home" });
 }
 
-export function goBooking(serviceId: number, serviceName: string, servicePrice: number) {
-  setRoute({ page: "booking", serviceId, serviceName, servicePrice });
+export function goBooking(serviceId: number, serviceName: string, servicePrice: number, withLowerLashes: boolean = false) {
+  setRoute({ page: "booking", serviceId, serviceName, servicePrice, withLowerLashes });
 }
 
 export function goMyBookings() {

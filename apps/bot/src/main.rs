@@ -19,8 +19,8 @@ enum Command {
     Today,
     #[command(description = "Записи на завтра (для мастера)")]
     Tomorrow,
-    #[command(description = "Добавить слоты: /addslots 2026-02-25 10:00 12:00 14:00 16:00")]
-    AddSlots(String),
+    #[command(description = "Открыть день для записи: /openday 2026-02-25")]
+    OpenDay(String),
     #[command(description = "Расписание на дату: /schedule 2026-02-25")]
     Schedule(String),
     #[command(description = "Помощь")]
@@ -89,7 +89,6 @@ async fn main() -> anyhow::Result<()> {
         admin_tg_id,
     };
 
-    // Handle commands + callback queries (inline buttons)
     let cmd_handler = Update::filter_message()
         .filter_command::<Command>()
         .endpoint({
@@ -163,14 +162,16 @@ async fn handle_command(
 
             let bookings = sqlx::query_as::<_, BookingInfo>(
                 "SELECT b.id, s.name as service_name, s.price as service_price,
-                        sl.date, sl.start_time, sl.end_time,
+                        COALESCE(b.date, sl.date) as date,
+                        COALESCE(b.start_time, sl.start_time) as start_time,
+                        COALESCE(b.end_time, sl.end_time) as end_time,
                         b.client_tg_id, b.client_username, b.client_first_name
                  FROM bookings b
                  JOIN services s ON s.id = b.service_id
-                 JOIN available_slots sl ON sl.id = b.slot_id
+                 LEFT JOIN available_slots sl ON sl.id = b.slot_id
                  WHERE b.client_tg_id = ? AND b.status = 'confirmed'
-                 AND sl.date >= date('now')
-                 ORDER BY sl.date ASC, sl.start_time ASC",
+                 AND COALESCE(b.date, sl.date) >= date('now')
+                 ORDER BY COALESCE(b.date, sl.date) ASC, COALESCE(b.start_time, sl.start_time) ASC",
             )
             .bind(user_id)
             .fetch_all(&state.pool)
@@ -202,7 +203,6 @@ async fn handle_command(
                     ));
                 }
 
-                // Add cancel buttons for each booking
                 let buttons: Vec<Vec<InlineKeyboardButton>> = bookings
                     .iter()
                     .map(|b| {
@@ -245,78 +245,78 @@ async fn handle_command(
             send_day_bookings(&bot, msg.chat.id, &state.pool, &tomorrow, "Завтра").await?;
         }
 
-        Command::AddSlots(args) => {
+        Command::OpenDay(args) => {
             let user_id = msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0);
             if user_id != state.admin_tg_id {
                 bot.send_message(msg.chat.id, "⛔ Только для мастера").await?;
                 return Ok(());
             }
 
-            let parts: Vec<&str> = args.split_whitespace().collect();
-            if parts.len() < 2 {
+            let date = args.trim().to_string();
+            if date.is_empty() {
                 bot.send_message(
                     msg.chat.id,
-                    "📝 <b>Формат:</b>\n<code>/addslots 2026-02-25 10:00 12:00 14:00 16:00</code>\n\n\
-                     Первый аргумент — дата, остальные — время начала слотов.\n\
-                     Длительность слота = 2 часа.",
+                    "📝 <b>Формат:</b>\n<code>/openday 2026-02-25</code>\n\n\
+                     Создаст 8 слотов по 1 часу: 12:00–20:00",
                 )
                 .parse_mode(ParseMode::Html)
                 .await?;
                 return Ok(());
             }
 
-            let date = parts[0];
-            // Validate date format
-            if chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").is_err() {
+            if chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d").is_err() {
                 bot.send_message(msg.chat.id, "❌ Неверный формат даты. Используй YYYY-MM-DD")
                     .await?;
                 return Ok(());
             }
 
-            let times = &parts[1..];
             let mut added = 0;
-            let mut errors = Vec::new();
+            for hour in 12..20 {
+                let start = format!("{:02}:00", hour);
+                let end = format!("{:02}:00", hour + 1);
 
-            for time in times {
-                // Validate time format
-                if time.len() != 5 || !time.contains(':') {
-                    errors.push(format!("{} — неверный формат", time));
-                    continue;
-                }
-
-                let start = *time;
-                // Calculate end time (+ 2 hours)
-                let hour: u32 = start[..2].parse().unwrap_or(99);
-                let min: u32 = start[3..].parse().unwrap_or(99);
-                if hour > 23 || min > 59 {
-                    errors.push(format!("{} — неверное время", time));
-                    continue;
-                }
-                let end_hour = hour + 2;
-                let end_time = format!("{:02}:{:02}", end_hour.min(23), min);
-
-                let result = sqlx::query(
-                    "INSERT INTO available_slots (date, start_time, end_time) VALUES (?, ?, ?)",
+                // Skip if already exists
+                let exists: bool = sqlx::query_scalar(
+                    "SELECT COUNT(*) > 0 FROM available_slots WHERE date = ? AND start_time = ?"
                 )
-                .bind(date)
-                .bind(start)
-                .bind(&end_time)
-                .execute(&state.pool)
-                .await;
+                .bind(&date)
+                .bind(&start)
+                .fetch_one(&state.pool)
+                .await
+                .unwrap_or(false);
 
-                if result.is_ok() {
-                    added += 1;
-                } else {
-                    errors.push(format!("{} — ошибка БД", time));
+                if !exists {
+                    let result = sqlx::query(
+                        "INSERT INTO available_slots (date, start_time, end_time) VALUES (?, ?, ?)"
+                    )
+                    .bind(&date)
+                    .bind(&start)
+                    .bind(&end)
+                    .execute(&state.pool)
+                    .await;
+
+                    if result.is_ok() {
+                        added += 1;
+                    }
                 }
             }
 
-            let mut reply = format!("✅ Добавлено {} слотов на {}", added, format_date_ru(date));
-            if !errors.is_empty() {
-                reply.push_str(&format!("\n\n⚠️ Ошибки:\n{}", errors.join("\n")));
+            if added > 0 {
+                bot.send_message(
+                    msg.chat.id,
+                    format!(
+                        "✅ Открыт день {} ({})\n📅 {} слотов по 1 часу: 12:00–20:00",
+                        format_date_ru(&date), date, added
+                    ),
+                )
+                .await?;
+            } else {
+                bot.send_message(
+                    msg.chat.id,
+                    format!("ℹ️ День {} уже открыт, все слоты на месте", format_date_ru(&date)),
+                )
+                .await?;
             }
-
-            bot.send_message(msg.chat.id, reply).await?;
         }
 
         Command::Schedule(args) => {
@@ -339,14 +339,15 @@ async fn handle_command(
             };
 
             #[derive(sqlx::FromRow)]
-            struct SlotInfo {
+            struct SlotWithBooking {
                 start_time: String,
                 end_time: String,
                 is_booked: bool,
+                booking_id: Option<i64>,
             }
 
-            let slots = sqlx::query_as::<_, SlotInfo>(
-                "SELECT start_time, end_time, is_booked FROM available_slots
+            let slots = sqlx::query_as::<_, SlotWithBooking>(
+                "SELECT start_time, end_time, is_booked, booking_id FROM available_slots
                  WHERE date = ? ORDER BY start_time ASC",
             )
             .bind(&date)
@@ -356,7 +357,7 @@ async fn handle_command(
             if slots.is_empty() {
                 bot.send_message(
                     msg.chat.id,
-                    format!("📅 {} — слотов нет\n\nДобавь: <code>/addslots {} 10:00 12:00 14:00</code>",
+                    format!("📅 {} — слотов нет\n\nОткрой день: <code>/openday {}</code>",
                         format_date_ru(&date), date),
                 )
                 .parse_mode(ParseMode::Html)
@@ -374,12 +375,38 @@ async fn handle_command(
 
             for s in &slots {
                 let icon = if s.is_booked { "🟠" } else { "🟢" };
-                text.push_str(&format!(
-                    "{} {} — {}\n",
-                    icon,
-                    &s.start_time[..5],
-                    &s.end_time[..5],
-                ));
+
+                // Try to get booking info for booked slots
+                let booking_info = if s.is_booked {
+                    if let Some(bid) = s.booking_id {
+                        sqlx::query_as::<_, (String, String)>(
+                            "SELECT s.name, b.client_first_name
+                             FROM bookings b JOIN services s ON s.id = b.service_id
+                             WHERE b.id = ? AND b.status = 'confirmed'"
+                        )
+                        .bind(bid)
+                        .fetch_optional(&state.pool)
+                        .await
+                        .ok()
+                        .flatten()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                if let Some((svc_name, client_name)) = booking_info {
+                    text.push_str(&format!(
+                        "{} {} — {} · {} · {}\n",
+                        icon, &s.start_time[..5], &s.end_time[..5], svc_name, client_name
+                    ));
+                } else {
+                    text.push_str(&format!(
+                        "{} {} — {}\n",
+                        icon, &s.start_time[..5], &s.end_time[..5],
+                    ));
+                }
             }
 
             bot.send_message(msg.chat.id, text)
@@ -403,9 +430,9 @@ async fn handle_command(
                      /today — записи на сегодня\n\
                      /tomorrow — записи на завтра\n\
                      /schedule — расписание на дату\n\
-                     /addslots — добавить слоты\n\n\
+                     /openday — открыть день для записи\n\n\
                      <b>Примеры:</b>\n\
-                     <code>/addslots 2026-02-25 10:00 12:00 14:00</code>\n\
+                     <code>/openday 2026-02-25</code> — создаёт 8 слотов (12–20)\n\
                      <code>/schedule 2026-02-25</code>",
                 );
             }
@@ -419,7 +446,7 @@ async fn handle_command(
     Ok(())
 }
 
-// ── Callback query handler (inline button clicks) ──
+// ── Callback query handler ──
 
 async fn handle_callback(
     bot: Bot,
@@ -433,14 +460,15 @@ async fn handle_callback(
     if let Some(booking_id_str) = data.strip_prefix("cancel:") {
         let booking_id: i64 = booking_id_str.parse().unwrap_or(0);
 
-        // Verify booking belongs to this user
         let booking = sqlx::query_as::<_, BookingInfo>(
             "SELECT b.id, s.name as service_name, s.price as service_price,
-                    sl.date, sl.start_time, sl.end_time,
+                    COALESCE(b.date, sl.date) as date,
+                    COALESCE(b.start_time, sl.start_time) as start_time,
+                    COALESCE(b.end_time, sl.end_time) as end_time,
                     b.client_tg_id, b.client_username, b.client_first_name
              FROM bookings b
              JOIN services s ON s.id = b.service_id
-             JOIN available_slots sl ON sl.id = b.slot_id
+             LEFT JOIN available_slots sl ON sl.id = b.slot_id
              WHERE b.id = ? AND b.client_tg_id = ? AND b.status = 'confirmed'",
         )
         .bind(booking_id)
@@ -449,7 +477,6 @@ async fn handle_callback(
         .await?;
 
         if let Some(b) = booking {
-            // Cancel it
             sqlx::query(
                 "UPDATE bookings SET status = 'cancelled', cancelled_at = datetime('now') WHERE id = ?",
             )
@@ -457,7 +484,13 @@ async fn handle_callback(
             .execute(&state.pool)
             .await?;
 
-            // Free the slot
+            // Free all slots belonging to this booking
+            sqlx::query("UPDATE available_slots SET is_booked = 0, booking_id = NULL WHERE booking_id = ?")
+                .bind(booking_id)
+                .execute(&state.pool)
+                .await?;
+
+            // Also free by old slot_id reference
             let slot_id: Option<i64> = sqlx::query_scalar(
                 "SELECT slot_id FROM bookings WHERE id = ?",
             )
@@ -466,7 +499,7 @@ async fn handle_callback(
             .await?;
 
             if let Some(sid) = slot_id {
-                sqlx::query("UPDATE available_slots SET is_booked = 0 WHERE id = ?")
+                sqlx::query("UPDATE available_slots SET is_booked = 0, booking_id = NULL WHERE id = ?")
                     .bind(sid)
                     .execute(&state.pool)
                     .await?;
@@ -509,7 +542,6 @@ async fn handle_callback(
                 .await?;
         }
     } else if let Some(booking_id_str) = data.strip_prefix("admin_cancel:") {
-        // Admin cancels a booking
         if user_id != state.admin_tg_id {
             bot.answer_callback_query(&q.id).text("⛔").await?;
             return Ok(());
@@ -519,11 +551,13 @@ async fn handle_callback(
 
         let booking = sqlx::query_as::<_, BookingInfo>(
             "SELECT b.id, s.name as service_name, s.price as service_price,
-                    sl.date, sl.start_time, sl.end_time,
+                    COALESCE(b.date, sl.date) as date,
+                    COALESCE(b.start_time, sl.start_time) as start_time,
+                    COALESCE(b.end_time, sl.end_time) as end_time,
                     b.client_tg_id, b.client_username, b.client_first_name
              FROM bookings b
              JOIN services s ON s.id = b.service_id
-             JOIN available_slots sl ON sl.id = b.slot_id
+             LEFT JOIN available_slots sl ON sl.id = b.slot_id
              WHERE b.id = ? AND b.status = 'confirmed'",
         )
         .bind(booking_id)
@@ -538,6 +572,12 @@ async fn handle_callback(
             .execute(&state.pool)
             .await?;
 
+            // Free all slots
+            sqlx::query("UPDATE available_slots SET is_booked = 0, booking_id = NULL WHERE booking_id = ?")
+                .bind(booking_id)
+                .execute(&state.pool)
+                .await?;
+
             let slot_id: Option<i64> = sqlx::query_scalar(
                 "SELECT slot_id FROM bookings WHERE id = ?",
             )
@@ -546,7 +586,7 @@ async fn handle_callback(
             .await?;
 
             if let Some(sid) = slot_id {
-                sqlx::query("UPDATE available_slots SET is_booked = 0 WHERE id = ?")
+                sqlx::query("UPDATE available_slots SET is_booked = 0, booking_id = NULL WHERE id = ?")
                     .bind(sid)
                     .execute(&state.pool)
                     .await?;
@@ -567,7 +607,7 @@ async fn handle_callback(
                 ),
             )
             .await
-            .ok(); // client may have blocked the bot
+            .ok();
 
             if let Some(cid) = chat_id {
                 bot.send_message(
@@ -597,13 +637,15 @@ async fn send_day_bookings(
 ) -> anyhow::Result<()> {
     let bookings = sqlx::query_as::<_, BookingInfo>(
         "SELECT b.id, s.name as service_name, s.price as service_price,
-                sl.date, sl.start_time, sl.end_time,
+                COALESCE(b.date, sl.date) as date,
+                COALESCE(b.start_time, sl.start_time) as start_time,
+                COALESCE(b.end_time, sl.end_time) as end_time,
                 b.client_tg_id, b.client_username, b.client_first_name
          FROM bookings b
          JOIN services s ON s.id = b.service_id
-         JOIN available_slots sl ON sl.id = b.slot_id
-         WHERE sl.date = ? AND b.status = 'confirmed'
-         ORDER BY sl.start_time ASC",
+         LEFT JOIN available_slots sl ON sl.id = b.slot_id
+         WHERE COALESCE(b.date, sl.date) = ? AND b.status = 'confirmed'
+         ORDER BY COALESCE(b.start_time, sl.start_time) ASC",
     )
     .bind(date)
     .fetch_all(pool)
@@ -650,7 +692,6 @@ async fn send_day_bookings(
         total,
     ));
 
-    // Add cancel buttons
     let buttons: Vec<Vec<InlineKeyboardButton>> = bookings
         .iter()
         .map(|b| {
@@ -678,10 +719,9 @@ async fn send_day_bookings(
 // ── Reminders ──
 
 async fn send_reminders(bot: Bot, pool: sqlx::SqlitePool) {
-    // Initial delay: wait 10 seconds before first check
     tokio::time::sleep(Duration::from_secs(10)).await;
 
-    let mut ticker = interval(Duration::from_secs(3600)); // check every hour
+    let mut ticker = interval(Duration::from_secs(3600));
 
     loop {
         ticker.tick().await;
@@ -692,12 +732,14 @@ async fn send_reminders(bot: Bot, pool: sqlx::SqlitePool) {
 
         let bookings = sqlx::query_as::<_, BookingInfo>(
             "SELECT b.id, s.name as service_name, s.price as service_price,
-                    sl.date, sl.start_time, sl.end_time,
+                    COALESCE(b.date, sl.date) as date,
+                    COALESCE(b.start_time, sl.start_time) as start_time,
+                    COALESCE(b.end_time, sl.end_time) as end_time,
                     b.client_tg_id, b.client_username, b.client_first_name
              FROM bookings b
              JOIN services s ON s.id = b.service_id
-             JOIN available_slots sl ON sl.id = b.slot_id
-             WHERE sl.date = ? AND b.status = 'confirmed' AND b.reminder_sent = 0",
+             LEFT JOIN available_slots sl ON sl.id = b.slot_id
+             WHERE COALESCE(b.date, sl.date) = ? AND b.status = 'confirmed' AND b.reminder_sent = 0",
         )
         .bind(&tomorrow)
         .fetch_all(&pool)

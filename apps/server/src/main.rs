@@ -62,8 +62,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/health", get(handlers::health::health))
         // Client endpoints
         .route("/api/services", get(handlers::client::list_services))
-        .route("/api/slots/dates", get(handlers::client::available_dates))
-        .route("/api/slots", get(handlers::client::slots_by_date))
+        .route("/api/addon-info", get(handlers::client::addon_info))
+        .route("/api/available-dates", get(handlers::client::available_dates_for_service))
+        .route("/api/available-times", get(handlers::client::available_times))
+        .route("/api/slots/dates", get(handlers::client::available_dates_for_service)) // backward compat
         .route("/api/bookings", post(handlers::client::create_booking))
         .route("/api/bookings/my", get(handlers::client::my_bookings))
         .route("/api/bookings/{id}", delete(handlers::client::cancel_booking))
@@ -74,6 +76,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/admin/slots", get(handlers::admin::list_slots))
         .route("/api/admin/slots", post(handlers::admin::create_slots))
         .route("/api/admin/slots/{id}", delete(handlers::admin::delete_slot))
+        .route("/api/admin/openday", post(handlers::admin::open_day))
         .route("/api/admin/bookings", get(handlers::admin::list_bookings))
         .route("/api/admin/bookings/{id}/cancel", post(handlers::admin::cancel_booking))
         .layer(cors)

@@ -18,49 +18,16 @@ export default function AdminSchedulePage() {
     (date) => adminApi.getSlots(date)
   );
 
-  // Quick slot templates
-  const templates = [
-    {
-      label: "Утро 9–13",
-      icon: "🌅",
-      slots: [
-        { start_time: "09:00", end_time: "11:00" },
-        { start_time: "11:00", end_time: "13:00" },
-      ],
-    },
-    {
-      label: "День 13–18",
-      icon: "☀️",
-      slots: [
-        { start_time: "13:00", end_time: "15:00" },
-        { start_time: "15:00", end_time: "17:00" },
-        { start_time: "17:00", end_time: "18:00" },
-      ],
-    },
-    {
-      label: "Полный день",
-      icon: "📅",
-      slots: [
-        { start_time: "09:00", end_time: "11:00" },
-        { start_time: "11:00", end_time: "13:00" },
-        { start_time: "13:00", end_time: "15:00" },
-        { start_time: "15:00", end_time: "17:00" },
-        { start_time: "17:00", end_time: "19:00" },
-      ],
-    },
-  ];
-
   const [adding, setAdding] = createSignal(false);
   const [showCustom, setShowCustom] = createSignal(false);
-  const [customStart, setCustomStart] = createSignal("10:00");
-  const [customEnd, setCustomEnd] = createSignal("12:00");
+  const [customStart, setCustomStart] = createSignal("12:00");
+  const [customEnd, setCustomEnd] = createSignal("13:00");
 
-  const addSlots = async (
-    templateSlots: { start_time: string; end_time: string }[]
-  ) => {
+  // Open full day (12:00–20:00)
+  const openDay = async () => {
     setAdding(true);
     try {
-      await adminApi.createSlots(selectedDate(), templateSlots);
+      await adminApi.openDay(selectedDate());
       WebApp.HapticFeedback.notificationOccurred("success");
       refetch();
     } catch (e: any) {
@@ -75,8 +42,19 @@ export default function AdminSchedulePage() {
       WebApp.showAlert("Время начала должно быть раньше конца");
       return;
     }
-    await addSlots([{ start_time: customStart(), end_time: customEnd() }]);
-    setShowCustom(false);
+    setAdding(true);
+    try {
+      await adminApi.createSlots(selectedDate(), [
+        { start_time: customStart(), end_time: customEnd() },
+      ]);
+      WebApp.HapticFeedback.notificationOccurred("success");
+      refetch();
+    } catch (e: any) {
+      WebApp.showAlert(e.message || "Ошибка");
+    } finally {
+      setAdding(false);
+      setShowCustom(false);
+    }
   };
 
   const deleteSlot = async (slot: Slot) => {
@@ -121,6 +99,7 @@ export default function AdminSchedulePage() {
 
   const bookedCount = () => slots()?.filter((s) => s.is_booked).length || 0;
   const freeCount = () => slots()?.filter((s) => !s.is_booked).length || 0;
+  const hasSlots = () => (slots()?.length || 0) > 0;
 
   return (
     <div class="animate-fade-in">
@@ -129,11 +108,11 @@ export default function AdminSchedulePage() {
           📅 Расписание
         </h2>
         <p class="text-sm mt-0.5" style={{ color: "var(--hint)" }}>
-          Выбери дату и добавь слоты для записи
+          Открывай дни и управляй слотами
         </p>
       </div>
 
-      {/* Date selector — horizontal scroll */}
+      {/* Date selector */}
       <div class="px-4 py-3 flex gap-2 overflow-x-auto">
         <For each={dates}>
           {(date) => (
@@ -152,8 +131,8 @@ export default function AdminSchedulePage() {
         </For>
       </div>
 
-      {/* Stats for selected date */}
-      <Show when={slots() && slots()!.length > 0}>
+      {/* Stats */}
+      <Show when={hasSlots()}>
         <div class="px-4 mb-3 flex gap-3">
           <div
             class="flex-1 rounded-xl p-3 text-center"
@@ -180,23 +159,19 @@ export default function AdminSchedulePage() {
         </div>
       </Show>
 
-      {/* Quick add templates */}
+      {/* Actions */}
       <div class="px-4 mb-2">
         <p class="text-sm font-medium mb-2" style={{ color: "var(--hint)" }}>
-          Быстрое добавление
+          Управление
         </p>
         <div class="flex gap-2 flex-wrap">
-          <For each={templates}>
-            {(tpl) => (
-              <button
-                class="chip chip-inactive"
-                disabled={adding()}
-                onClick={() => addSlots(tpl.slots)}
-              >
-                {tpl.icon} {tpl.label}
-              </button>
-            )}
-          </For>
+          <button
+            class="chip chip-inactive"
+            disabled={adding()}
+            onClick={openDay}
+          >
+            📅 Открыть день (12–20)
+          </button>
           <button
             class="chip chip-inactive"
             onClick={() => setShowCustom(!showCustom())}
@@ -271,7 +246,7 @@ export default function AdminSchedulePage() {
         </div>
       </Show>
 
-      {/* Existing slots */}
+      {/* Slots timeline */}
       <div class="px-4">
         <div class="flex justify-between items-center mb-2">
           <p class="text-sm font-medium" style={{ color: "var(--hint)" }}>
@@ -290,7 +265,7 @@ export default function AdminSchedulePage() {
 
         <Show when={!slots.loading} fallback={<Loader />}>
           <Show
-            when={slots()?.length}
+            when={hasSlots()}
             fallback={
               <div
                 class="text-center py-8 rounded-xl"
@@ -299,7 +274,7 @@ export default function AdminSchedulePage() {
                 <p class="text-3xl mb-2">📭</p>
                 <p>Нет слотов на эту дату</p>
                 <p class="text-xs mt-1">
-                  Добавь слоты выше — клиенты смогут записаться
+                  Нажми «Открыть день» чтобы создать 8 слотов
                 </p>
               </div>
             }

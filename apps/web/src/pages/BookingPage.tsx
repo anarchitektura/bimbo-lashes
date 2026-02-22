@@ -1,6 +1,6 @@
 import { createResource, createSignal, For, Show } from "solid-js";
 import WebApp from "@twa-dev/sdk";
-import { api, type Slot } from "../lib/api";
+import { api, type TimeBlock } from "../lib/api";
 import { goHome, goMyBookings } from "../lib/router";
 import { formatPrice, formatDateShort, friendlyDate, formatTime } from "../lib/utils";
 import Loader from "../components/Loader";
@@ -9,6 +9,7 @@ interface Props {
   serviceId: number;
   serviceName: string;
   servicePrice: number;
+  withLowerLashes: boolean;
 }
 
 type Step = "date" | "time" | "confirm" | "done";
@@ -16,17 +17,21 @@ type Step = "date" | "time" | "confirm" | "done";
 export default function BookingPage(props: Props) {
   const [step, setStep] = createSignal<Step>("date");
   const [selectedDate, setSelectedDate] = createSignal<string>("");
-  const [selectedSlot, setSelectedSlot] = createSignal<Slot | null>(null);
+  const [selectedTime, setSelectedTime] = createSignal<TimeBlock | null>(null);
+  const [bookingMode, setBookingMode] = createSignal<"free" | "tight">("free");
   const [loading, setLoading] = createSignal(false);
   const [error, setError] = createSignal("");
 
-  // Fetch available dates
-  const [dates] = createResource(() => api.getAvailableDates());
+  // Fetch available dates for this service
+  const [dates] = createResource(() => api.getAvailableDates(props.serviceId));
 
-  // Fetch slots when date is selected
-  const [slots] = createResource(
+  // Fetch available times when date is selected
+  const [timesData] = createResource(
     () => selectedDate(),
-    (date) => (date ? api.getSlotsByDate(date) : Promise.resolve([]))
+    (date) =>
+      date
+        ? api.getAvailableTimes(date, props.serviceId)
+        : Promise.resolve({ mode: "free" as const, times: [] })
   );
 
   const selectDate = (date: string) => {
@@ -35,21 +40,29 @@ export default function BookingPage(props: Props) {
     setStep("time");
   };
 
-  const selectSlot = (slot: Slot) => {
+  const selectTime = (time: TimeBlock) => {
     WebApp.HapticFeedback.selectionChanged();
-    setSelectedSlot(slot);
+    setSelectedTime(time);
+    if (timesData()) {
+      setBookingMode(timesData()!.mode);
+    }
     setStep("confirm");
   };
 
   const confirmBooking = async () => {
-    const slot = selectedSlot();
-    if (!slot) return;
+    const time = selectedTime();
+    if (!time) return;
 
     setLoading(true);
     setError("");
 
     try {
-      await api.createBooking(props.serviceId, slot.id);
+      await api.createBooking(
+        props.serviceId,
+        selectedDate(),
+        time.start_time,
+        props.withLowerLashes
+      );
       WebApp.HapticFeedback.notificationOccurred("success");
       setStep("done");
     } catch (e: any) {
@@ -77,7 +90,7 @@ export default function BookingPage(props: Props) {
         <div
           class="h-1 rounded-full flex-1 transition-all duration-300"
           style={{
-            background: step() === "date" || step() === "time" || step() === "confirm" || step() === "done"
+            background: step() !== "done" || step() === "date" || step() === "time" || step() === "confirm"
               ? "var(--btn)"
               : "var(--secondary-bg)",
           }}
@@ -137,23 +150,33 @@ export default function BookingPage(props: Props) {
           <p class="text-sm font-medium mb-1" style={{ color: "var(--hint)" }}>
             🕐 Выбери время
           </p>
-          <p class="text-xs mb-3" style={{ color: "var(--hint)" }}>
-            {friendlyDate(selectedDate())}, {formatDateShort(selectedDate())}
-          </p>
-          <Show when={!slots.loading} fallback={<Loader />}>
-            <Show when={slots()?.length} fallback={
+          <div class="flex items-center gap-2 mb-3">
+            <p class="text-xs" style={{ color: "var(--hint)" }}>
+              {friendlyDate(selectedDate())}, {formatDateShort(selectedDate())}
+            </p>
+            <Show when={timesData()?.mode === "tight"}>
+              <span
+                class="text-xs px-2 py-0.5 rounded-full"
+                style={{ background: "#fff3e0", color: "#e65100" }}
+              >
+                оптимальное
+              </span>
+            </Show>
+          </div>
+          <Show when={!timesData.loading} fallback={<Loader />}>
+            <Show when={timesData()?.times?.length} fallback={
               <div class="text-center py-8" style={{ color: "var(--hint)" }}>
-                <p>Нет свободных слотов</p>
+                <p>Нет свободного времени</p>
               </div>
             }>
               <div class="grid grid-cols-3 gap-2">
-                <For each={slots()}>
-                  {(slot) => (
+                <For each={timesData()?.times}>
+                  {(time) => (
                     <button
                       class="chip chip-inactive text-center justify-center"
-                      onClick={() => selectSlot(slot)}
+                      onClick={() => selectTime(time)}
                     >
-                      {formatTime(slot.start_time)}
+                      {formatTime(time.start_time)}
                     </button>
                   )}
                 </For>
@@ -194,7 +217,7 @@ export default function BookingPage(props: Props) {
               <div class="flex justify-between">
                 <span style={{ color: "var(--hint)" }}>Время</span>
                 <span class="font-medium">
-                  {formatTime(selectedSlot()!.start_time)} — {formatTime(selectedSlot()!.end_time)}
+                  {formatTime(selectedTime()!.start_time)} — {formatTime(selectedTime()!.end_time)}
                 </span>
               </div>
               <div
@@ -245,7 +268,7 @@ export default function BookingPage(props: Props) {
             {props.serviceName}
           </p>
           <p class="text-sm" style={{ color: "var(--hint)" }}>
-            {friendlyDate(selectedDate())} в {formatTime(selectedSlot()!.start_time)}
+            {friendlyDate(selectedDate())} в {formatTime(selectedTime()!.start_time)}
           </p>
           <p class="text-xs mt-4" style={{ color: "var(--hint)" }}>
             Мы напомним тебе за день до визита 💕

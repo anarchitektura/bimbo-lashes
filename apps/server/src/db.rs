@@ -105,6 +105,44 @@ pub async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         tracing::info!("Applied migration: 004_delete_old_services");
     }
 
+    // 005: Smart slots — 1-hour base slots, multi-slot bookings, addon support
+    let smart_applied: bool = sqlx::query_scalar(
+        "SELECT COUNT(*) > 0 FROM _migrations WHERE name = '005_smart_slots'"
+    )
+    .fetch_one(pool)
+    .await?;
+
+    if !smart_applied {
+        // Add booking_id to available_slots (multi-slot booking tracking)
+        sqlx::query("ALTER TABLE available_slots ADD COLUMN booking_id INTEGER")
+            .execute(pool).await.ok();
+
+        // Store date/time directly on bookings (no more JOIN dependency)
+        sqlx::query("ALTER TABLE bookings ADD COLUMN date TEXT")
+            .execute(pool).await.ok();
+        sqlx::query("ALTER TABLE bookings ADD COLUMN start_time TEXT")
+            .execute(pool).await.ok();
+        sqlx::query("ALTER TABLE bookings ADD COLUMN end_time TEXT")
+            .execute(pool).await.ok();
+        sqlx::query("ALTER TABLE bookings ADD COLUMN with_lower_lashes INTEGER NOT NULL DEFAULT 0")
+            .execute(pool).await.ok();
+
+        // Service type: 'main' (bookable) vs 'addon' (checkbox add-on)
+        sqlx::query("ALTER TABLE services ADD COLUMN service_type TEXT NOT NULL DEFAULT 'main'")
+            .execute(pool).await.ok();
+        sqlx::query("UPDATE services SET service_type = 'addon' WHERE name LIKE '%нижних%'")
+            .execute(pool).await.ok();
+
+        // Clear old slots (no booking history exists)
+        sqlx::query("DELETE FROM available_slots")
+            .execute(pool).await.ok();
+
+        sqlx::query("INSERT INTO _migrations (name) VALUES ('005_smart_slots')")
+            .execute(pool)
+            .await?;
+        tracing::info!("Applied migration: 005_smart_slots");
+    }
+
     tracing::info!("Database migrations up to date");
     Ok(())
 }

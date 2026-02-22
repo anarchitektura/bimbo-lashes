@@ -70,7 +70,7 @@ export default function MyBookingsPage() {
                     </div>
                     <div class="text-right">
                       <div class="font-bold" style={{ color: "var(--btn)" }}>
-                        {formatPrice(booking.service_price)}
+                        {formatPrice(booking.total_price ?? booking.service_price)}
                       </div>
                     </div>
                   </div>

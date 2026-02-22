@@ -44,6 +44,7 @@ export default function App() {
                   serviceId={r.serviceId}
                   serviceName={r.serviceName}
                   servicePrice={r.servicePrice}
+                  withLowerLashes={r.withLowerLashes}
                 />
               );
             }

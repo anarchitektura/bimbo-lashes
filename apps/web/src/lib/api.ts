@@ -38,6 +38,7 @@ export interface Service {
   duration_min: number;
   is_active: boolean;
   sort_order: number;
+  service_type: string;
 }
 
 export interface Slot {
@@ -46,6 +47,23 @@ export interface Slot {
   start_time: string;
   end_time: string;
   is_booked: boolean;
+  booking_id: number | null;
+}
+
+export interface TimeBlock {
+  start_time: string;
+  end_time: string;
+}
+
+export interface AvailableTimes {
+  mode: "free" | "tight";
+  times: TimeBlock[];
+}
+
+export interface AddonInfo {
+  name: string;
+  price: number;
+  service_id: number;
 }
 
 export interface BookingDetail {
@@ -60,6 +78,8 @@ export interface BookingDetail {
   client_first_name: string;
   status: string;
   created_at: string;
+  with_lower_lashes?: boolean;
+  total_price?: number;
 }
 
 // ── Client API ──
@@ -67,15 +87,23 @@ export interface BookingDetail {
 export const api = {
   getServices: () => request<Service[]>("/api/services"),
 
-  getAvailableDates: () => request<string[]>("/api/slots/dates"),
+  getAddonInfo: () => request<AddonInfo | null>("/api/addon-info"),
 
-  getSlotsByDate: (date: string) =>
-    request<Slot[]>(`/api/slots?date=${date}`),
+  getAvailableDates: (serviceId: number) =>
+    request<string[]>(`/api/available-dates?service_id=${serviceId}`),
 
-  createBooking: (serviceId: number, slotId: number) =>
+  getAvailableTimes: (date: string, serviceId: number) =>
+    request<AvailableTimes>(`/api/available-times?date=${date}&service_id=${serviceId}`),
+
+  createBooking: (serviceId: number, date: string, startTime: string, withLowerLashes: boolean = false) =>
     request<BookingDetail>("/api/bookings", {
       method: "POST",
-      body: JSON.stringify({ service_id: serviceId, slot_id: slotId }),
+      body: JSON.stringify({
+        service_id: serviceId,
+        date,
+        start_time: startTime,
+        with_lower_lashes: withLowerLashes,
+      }),
     }),
 
   getMyBookings: () => request<BookingDetail[]>("/api/bookings/my"),
@@ -113,6 +141,12 @@ export const adminApi = {
     request<Slot[]>("/api/admin/slots", {
       method: "POST",
       body: JSON.stringify({ date, slots }),
+    }),
+
+  openDay: (date: string) =>
+    request<Slot[]>("/api/admin/openday", {
+      method: "POST",
+      body: JSON.stringify({ date }),
     }),
 
   deleteSlot: (id: number) =>

@@ -11,6 +11,7 @@ pub struct Service {
     pub duration_min: i64,
     pub is_active: bool,
     pub sort_order: i64,
+    pub service_type: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -20,6 +21,7 @@ pub struct AvailableSlot {
     pub start_time: String,
     pub end_time: String,
     pub is_booked: bool,
+    pub booking_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -34,6 +36,10 @@ pub struct Booking {
     pub reminder_sent: bool,
     pub created_at: String,
     pub cancelled_at: Option<String>,
+    pub date: Option<String>,
+    pub start_time: Option<String>,
+    pub end_time: Option<String>,
+    pub with_lower_lashes: bool,
 }
 
 // ── API request/response types ──
@@ -41,7 +47,45 @@ pub struct Booking {
 #[derive(Debug, Deserialize)]
 pub struct CreateBookingRequest {
     pub service_id: i64,
-    pub slot_id: i64,
+    pub date: String,
+    pub start_time: String,
+    #[serde(default)]
+    pub with_lower_lashes: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AvailableTimesQuery {
+    pub date: String,
+    pub service_id: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AvailableDatesQuery {
+    pub service_id: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TimeBlock {
+    pub start_time: String,
+    pub end_time: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AvailableTimesResponse {
+    pub mode: String,
+    pub times: Vec<TimeBlock>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AddonInfo {
+    pub name: String,
+    pub price: i64,
+    pub service_id: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OpenDayRequest {
+    pub date: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -100,6 +144,10 @@ pub struct BookingDetail {
     pub client_first_name: String,
     pub status: String,
     pub created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub with_lower_lashes: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_price: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]

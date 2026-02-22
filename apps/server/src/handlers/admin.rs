@@ -48,7 +48,7 @@ pub async fn list_all_services(
     extract_admin(auth_header, &state)?;
 
     let services = sqlx::query_as::<_, Service>(
-        "SELECT id, name, description, price, duration_min, is_active, sort_order
+        "SELECT id, name, description, price, duration_min, is_active, sort_order, service_type
          FROM services ORDER BY sort_order ASC"
     )
     .fetch_all(&state.db)
@@ -82,7 +82,7 @@ pub async fn create_service(
     .last_insert_rowid();
 
     let service = sqlx::query_as::<_, Service>(
-        "SELECT id, name, description, price, duration_min, is_active, sort_order
+        "SELECT id, name, description, price, duration_min, is_active, sort_order, service_type
          FROM services WHERE id = ?"
     )
     .bind(id)
@@ -103,7 +103,6 @@ pub async fn update_service(
     let auth_header = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok());
     extract_admin(auth_header, &state)?;
 
-    // Build dynamic update
     if let Some(name) = &body.name {
         sqlx::query("UPDATE services SET name = ? WHERE id = ?")
             .bind(name).bind(id).execute(&state.db).await.ok();
@@ -130,7 +129,7 @@ pub async fn update_service(
     }
 
     let service = sqlx::query_as::<_, Service>(
-        "SELECT id, name, description, price, duration_min, is_active, sort_order
+        "SELECT id, name, description, price, duration_min, is_active, sort_order, service_type
          FROM services WHERE id = ?"
     )
     .bind(id)
@@ -151,7 +150,7 @@ pub async fn list_slots(
     extract_admin(auth_header, &state)?;
 
     let slots = sqlx::query_as::<_, AvailableSlot>(
-        "SELECT id, date, start_time, end_time, is_booked
+        "SELECT id, date, start_time, end_time, is_booked, booking_id
          FROM available_slots WHERE date = ?
          ORDER BY start_time ASC"
     )
@@ -184,9 +183,65 @@ pub async fn create_slots(
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::error("DB error"))))?;
     }
 
-    // Return all slots for that date
     let slots = sqlx::query_as::<_, AvailableSlot>(
-        "SELECT id, date, start_time, end_time, is_booked
+        "SELECT id, date, start_time, end_time, is_booked, booking_id
+         FROM available_slots WHERE date = ?
+         ORDER BY start_time ASC"
+    )
+    .bind(&body.date)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::error("DB error"))))?;
+
+    Ok(Json(ApiResponse::success(slots)))
+}
+
+/// POST /api/admin/openday — create 1-hour slots for a full working day (12:00–20:00)
+pub async fn open_day(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<OpenDayRequest>,
+) -> Result<Json<ApiResponse<Vec<AvailableSlot>>>, (StatusCode, Json<ApiResponse<()>>)> {
+    let auth_header = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok());
+    extract_admin(auth_header, &state)?;
+
+    if chrono::NaiveDate::parse_from_str(&body.date, "%Y-%m-%d").is_err() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::error("Неверный формат даты")),
+        ));
+    }
+
+    // Create 8 one-hour slots: 12:00-13:00, ..., 19:00-20:00
+    for hour in 12..20 {
+        let start = format!("{:02}:00", hour);
+        let end = format!("{:02}:00", hour + 1);
+
+        // Idempotent: skip if already exists
+        let exists: bool = sqlx::query_scalar(
+            "SELECT COUNT(*) > 0 FROM available_slots WHERE date = ? AND start_time = ?"
+        )
+        .bind(&body.date)
+        .bind(&start)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::error("DB error"))))?;
+
+        if !exists {
+            sqlx::query(
+                "INSERT INTO available_slots (date, start_time, end_time) VALUES (?, ?, ?)"
+            )
+            .bind(&body.date)
+            .bind(&start)
+            .bind(&end)
+            .execute(&state.db)
+            .await
+            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::error("DB error"))))?;
+        }
+    }
+
+    let slots = sqlx::query_as::<_, AvailableSlot>(
+        "SELECT id, date, start_time, end_time, is_booked, booking_id
          FROM available_slots WHERE date = ?
          ORDER BY start_time ASC"
     )
@@ -208,7 +263,7 @@ pub async fn delete_slot(
     extract_admin(auth_header, &state)?;
 
     let slot = sqlx::query_as::<_, AvailableSlot>(
-        "SELECT id, date, start_time, end_time, is_booked FROM available_slots WHERE id = ?"
+        "SELECT id, date, start_time, end_time, is_booked, booking_id FROM available_slots WHERE id = ?"
     )
     .bind(id)
     .fetch_optional(&state.db)
@@ -232,7 +287,7 @@ pub async fn delete_slot(
     Ok(Json(ApiResponse::success("Слот удалён")))
 }
 
-/// GET /api/admin/bookings?date=YYYY-MM-DD — list bookings
+/// GET /api/admin/bookings — list bookings
 pub async fn list_bookings(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
@@ -244,14 +299,21 @@ pub async fn list_bookings(
     let bookings = if let Some(date) = &query.date {
         sqlx::query_as::<_, BookingDetail>(
             "SELECT b.id, s.name as service_name, s.price as service_price,
-                    sl.date, sl.start_time, sl.end_time,
+                    COALESCE(b.date, sl.date) as date,
+                    COALESCE(b.start_time, sl.start_time) as start_time,
+                    COALESCE(b.end_time, sl.end_time) as end_time,
                     b.client_tg_id, b.client_username, b.client_first_name,
-                    b.status, b.created_at
+                    b.status, b.created_at,
+                    CASE WHEN b.with_lower_lashes = 1 THEN 1 ELSE 0 END as with_lower_lashes,
+                    CASE WHEN b.with_lower_lashes = 1
+                         THEN s.price + COALESCE((SELECT price FROM services WHERE service_type = 'addon' AND is_active = 1 LIMIT 1), 500)
+                         ELSE s.price
+                    END as total_price
              FROM bookings b
              JOIN services s ON s.id = b.service_id
-             JOIN available_slots sl ON sl.id = b.slot_id
-             WHERE sl.date = ? AND b.status = 'confirmed'
-             ORDER BY sl.start_time ASC"
+             LEFT JOIN available_slots sl ON sl.id = b.slot_id
+             WHERE COALESCE(b.date, sl.date) = ? AND b.status = 'confirmed'
+             ORDER BY COALESCE(b.start_time, sl.start_time) ASC"
         )
         .bind(date)
         .fetch_all(&state.db)
@@ -259,31 +321,44 @@ pub async fn list_bookings(
     } else if let (Some(from), Some(to)) = (&query.from, &query.to) {
         sqlx::query_as::<_, BookingDetail>(
             "SELECT b.id, s.name as service_name, s.price as service_price,
-                    sl.date, sl.start_time, sl.end_time,
+                    COALESCE(b.date, sl.date) as date,
+                    COALESCE(b.start_time, sl.start_time) as start_time,
+                    COALESCE(b.end_time, sl.end_time) as end_time,
                     b.client_tg_id, b.client_username, b.client_first_name,
-                    b.status, b.created_at
+                    b.status, b.created_at,
+                    CASE WHEN b.with_lower_lashes = 1 THEN 1 ELSE 0 END as with_lower_lashes,
+                    CASE WHEN b.with_lower_lashes = 1
+                         THEN s.price + COALESCE((SELECT price FROM services WHERE service_type = 'addon' AND is_active = 1 LIMIT 1), 500)
+                         ELSE s.price
+                    END as total_price
              FROM bookings b
              JOIN services s ON s.id = b.service_id
-             JOIN available_slots sl ON sl.id = b.slot_id
-             WHERE sl.date BETWEEN ? AND ? AND b.status = 'confirmed'
-             ORDER BY sl.date ASC, sl.start_time ASC"
+             LEFT JOIN available_slots sl ON sl.id = b.slot_id
+             WHERE COALESCE(b.date, sl.date) BETWEEN ? AND ? AND b.status = 'confirmed'
+             ORDER BY COALESCE(b.date, sl.date) ASC, COALESCE(b.start_time, sl.start_time) ASC"
         )
         .bind(from)
         .bind(to)
         .fetch_all(&state.db)
         .await
     } else {
-        // Default: today and future
         sqlx::query_as::<_, BookingDetail>(
             "SELECT b.id, s.name as service_name, s.price as service_price,
-                    sl.date, sl.start_time, sl.end_time,
+                    COALESCE(b.date, sl.date) as date,
+                    COALESCE(b.start_time, sl.start_time) as start_time,
+                    COALESCE(b.end_time, sl.end_time) as end_time,
                     b.client_tg_id, b.client_username, b.client_first_name,
-                    b.status, b.created_at
+                    b.status, b.created_at,
+                    CASE WHEN b.with_lower_lashes = 1 THEN 1 ELSE 0 END as with_lower_lashes,
+                    CASE WHEN b.with_lower_lashes = 1
+                         THEN s.price + COALESCE((SELECT price FROM services WHERE service_type = 'addon' AND is_active = 1 LIMIT 1), 500)
+                         ELSE s.price
+                    END as total_price
              FROM bookings b
              JOIN services s ON s.id = b.service_id
-             JOIN available_slots sl ON sl.id = b.slot_id
-             WHERE sl.date >= date('now') AND b.status = 'confirmed'
-             ORDER BY sl.date ASC, sl.start_time ASC"
+             LEFT JOIN available_slots sl ON sl.id = b.slot_id
+             WHERE COALESCE(b.date, sl.date) >= date('now') AND b.status = 'confirmed'
+             ORDER BY COALESCE(b.date, sl.date) ASC, COALESCE(b.start_time, sl.start_time) ASC"
         )
         .fetch_all(&state.db)
         .await
@@ -317,43 +392,38 @@ pub async fn cancel_booking(
         .await
         .ok();
 
-    sqlx::query("UPDATE available_slots SET is_booked = 0 WHERE id = ?")
+    // Free all slots belonging to this booking
+    sqlx::query("UPDATE available_slots SET is_booked = 0, booking_id = NULL WHERE booking_id = ?")
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .ok();
+
+    sqlx::query("UPDATE available_slots SET is_booked = 0, booking_id = NULL WHERE id = ?")
         .bind(booking.slot_id)
         .execute(&state.db)
         .await
         .ok();
 
-    // Notify client about cancellation
-    let slot = sqlx::query_as::<_, AvailableSlot>(
-        "SELECT id, date, start_time, end_time, is_booked FROM available_slots WHERE id = ?"
-    )
-    .bind(booking.slot_id)
-    .fetch_optional(&state.db)
-    .await
-    .ok()
-    .flatten();
+    // Notify client
+    let b_date = booking.date.as_deref().unwrap_or("?");
+    let b_start = booking.start_time.as_deref().unwrap_or("?");
 
-    if let Some(sl) = slot {
-        let message = format!(
-            "😔 Ваша запись на {} в {} была отменена мастером.\n\n\
-             Пожалуйста, выберите другое время.",
-            sl.date, sl.start_time
-        );
+    let message = format!(
+        "😔 Твоя запись на {} в {} была отменена мастером.\n\nВыбери другое время 💕",
+        b_date, b_start
+    );
 
-        let url = format!(
-            "https://api.telegram.org/bot{}/sendMessage",
-            state.bot_token
-        );
-        let client = reqwest::Client::new();
-        let _ = client
-            .post(&url)
-            .json(&serde_json::json!({
-                "chat_id": booking.client_tg_id,
-                "text": message
-            }))
-            .send()
-            .await;
-    }
+    let url = format!("https://api.telegram.org/bot{}/sendMessage", state.bot_token);
+    let client = reqwest::Client::new();
+    let _ = client
+        .post(&url)
+        .json(&serde_json::json!({
+            "chat_id": booking.client_tg_id,
+            "text": message
+        }))
+        .send()
+        .await;
 
     Ok(Json(ApiResponse::success("Запись отменена")))
 }
