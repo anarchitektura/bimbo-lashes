@@ -638,7 +638,7 @@ pub async fn calendar(
             false
         } else if query.service_id.is_some() {
             slots
-                .map_or(false, |s| has_consecutive_free_slots(s, slots_needed))
+                .is_some_and(|s| has_consecutive_free_slots(s, slots_needed))
         } else {
             free > 0
         };

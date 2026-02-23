@@ -229,7 +229,7 @@ pub async fn open_day(
     }
 
     let start_h = body.start_hour.unwrap_or(12).min(23);
-    let end_h = body.end_hour.unwrap_or(20).max(1).min(24);
+    let end_h = body.end_hour.unwrap_or(20).clamp(1, 24);
 
     if start_h >= end_h {
         return Err((
