@@ -102,3 +102,205 @@ pub async fn require_auth(
 pub fn is_admin(user: &TelegramUser, admin_tg_id: i64) -> bool {
     user.id == admin_tg_id
 }
+
+// ── Tests ──
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TEST_BOT_TOKEN: &str = "7777777777:AAFake_Test_Token_For_Unit_Tests";
+
+    /// Build a valid initData string with correct HMAC-SHA256 signature.
+    fn build_init_data(bot_token: &str, user_json: &str, auth_date: i64) -> String {
+        let mut params = BTreeMap::new();
+        params.insert("auth_date".to_string(), auth_date.to_string());
+        params.insert("user".to_string(), user_json.to_string());
+
+        let data_check_string: String = params
+            .iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let mut secret_mac =
+            HmacSha256::new_from_slice(b"WebAppData").expect("HMAC");
+        secret_mac.update(bot_token.as_bytes());
+        let secret_key = secret_mac.finalize().into_bytes();
+
+        let mut mac = HmacSha256::new_from_slice(&secret_key).expect("HMAC");
+        mac.update(data_check_string.as_bytes());
+        let hash = hex::encode(mac.finalize().into_bytes());
+
+        let mut encoded = url::form_urlencoded::Serializer::new(String::new());
+        for (k, v) in &params {
+            encoded.append_pair(k, v);
+        }
+        encoded.append_pair("hash", &hash);
+        encoded.finish()
+    }
+
+    fn make_user(id: i64, first_name: &str, username: Option<&str>) -> TelegramUser {
+        TelegramUser {
+            id,
+            first_name: first_name.to_string(),
+            last_name: None,
+            username: username.map(|s| s.to_string()),
+        }
+    }
+
+    fn fresh_auth_date() -> i64 {
+        chrono::Utc::now().timestamp() - 60 // 1 minute ago
+    }
+
+    fn test_user_json() -> String {
+        r#"{"id":12345,"first_name":"Тест","username":"testuser"}"#.to_string()
+    }
+
+    // ── validate_init_data ──
+
+    #[test]
+    fn test_validate_valid_init_data() {
+        let init_data = build_init_data(TEST_BOT_TOKEN, &test_user_json(), fresh_auth_date());
+        let user = validate_init_data(&init_data, TEST_BOT_TOKEN);
+        assert!(user.is_some());
+        let user = user.unwrap();
+        assert_eq!(user.id, 12345);
+        assert_eq!(user.first_name, "Тест");
+        assert_eq!(user.username.as_deref(), Some("testuser"));
+    }
+
+    #[test]
+    fn test_validate_wrong_token() {
+        let init_data = build_init_data(TEST_BOT_TOKEN, &test_user_json(), fresh_auth_date());
+        let user = validate_init_data(&init_data, "9999999999:AAWrong_Token");
+        assert!(user.is_none());
+    }
+
+    #[test]
+    fn test_validate_tampered_hash() {
+        let mut init_data = build_init_data(TEST_BOT_TOKEN, &test_user_json(), fresh_auth_date());
+        // Replace last character of the hash
+        let last = init_data.pop().unwrap();
+        let replacement = if last == 'a' { 'b' } else { 'a' };
+        init_data.push(replacement);
+        assert!(validate_init_data(&init_data, TEST_BOT_TOKEN).is_none());
+    }
+
+    #[test]
+    fn test_validate_expired_auth_date() {
+        let old_date = chrono::Utc::now().timestamp() - 90000; // >24h ago
+        let init_data = build_init_data(TEST_BOT_TOKEN, &test_user_json(), old_date);
+        assert!(validate_init_data(&init_data, TEST_BOT_TOKEN).is_none());
+    }
+
+    #[test]
+    fn test_validate_barely_fresh() {
+        // 1 second before expiry
+        let date = chrono::Utc::now().timestamp() - (MAX_AUTH_AGE_SECS - 1);
+        let init_data = build_init_data(TEST_BOT_TOKEN, &test_user_json(), date);
+        assert!(validate_init_data(&init_data, TEST_BOT_TOKEN).is_some());
+    }
+
+    #[test]
+    fn test_validate_missing_hash() {
+        // Build init_data without hash
+        let encoded = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("auth_date", &fresh_auth_date().to_string())
+            .append_pair("user", &test_user_json())
+            .finish();
+        assert!(validate_init_data(&encoded, TEST_BOT_TOKEN).is_none());
+    }
+
+    #[test]
+    fn test_validate_missing_user() {
+        // Build with hash but no user param — hash will be valid for auth_date-only data
+        let mut params = BTreeMap::new();
+        params.insert("auth_date".to_string(), fresh_auth_date().to_string());
+
+        let data_check_string: String = params
+            .iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let mut secret_mac = HmacSha256::new_from_slice(b"WebAppData").unwrap();
+        secret_mac.update(TEST_BOT_TOKEN.as_bytes());
+        let secret_key = secret_mac.finalize().into_bytes();
+        let mut mac = HmacSha256::new_from_slice(&secret_key).unwrap();
+        mac.update(data_check_string.as_bytes());
+        let hash = hex::encode(mac.finalize().into_bytes());
+
+        let encoded = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("auth_date", &fresh_auth_date().to_string())
+            .append_pair("hash", &hash)
+            .finish();
+
+        assert!(validate_init_data(&encoded, TEST_BOT_TOKEN).is_none());
+    }
+
+    #[test]
+    fn test_validate_invalid_user_json() {
+        let init_data = build_init_data(TEST_BOT_TOKEN, "not json at all", fresh_auth_date());
+        assert!(validate_init_data(&init_data, TEST_BOT_TOKEN).is_none());
+    }
+
+    #[test]
+    fn test_validate_empty_string() {
+        assert!(validate_init_data("", TEST_BOT_TOKEN).is_none());
+    }
+
+    // ── extract_user_from_header ──
+
+    #[test]
+    fn test_extract_valid_header() {
+        let init_data = build_init_data(TEST_BOT_TOKEN, &test_user_json(), fresh_auth_date());
+        let header = format!("tma {}", init_data);
+        let user = extract_user_from_header(&header, TEST_BOT_TOKEN);
+        assert!(user.is_some());
+        assert_eq!(user.unwrap().id, 12345);
+    }
+
+    #[test]
+    fn test_extract_wrong_prefix() {
+        let init_data = build_init_data(TEST_BOT_TOKEN, &test_user_json(), fresh_auth_date());
+        let header = format!("Bearer {}", init_data);
+        assert!(extract_user_from_header(&header, TEST_BOT_TOKEN).is_none());
+    }
+
+    #[test]
+    fn test_extract_no_prefix() {
+        let init_data = build_init_data(TEST_BOT_TOKEN, &test_user_json(), fresh_auth_date());
+        assert!(extract_user_from_header(&init_data, TEST_BOT_TOKEN).is_none());
+    }
+
+    #[test]
+    fn test_extract_empty() {
+        assert!(extract_user_from_header("", TEST_BOT_TOKEN).is_none());
+    }
+
+    #[test]
+    fn test_extract_tma_only() {
+        assert!(extract_user_from_header("tma ", TEST_BOT_TOKEN).is_none());
+    }
+
+    // ── is_admin ──
+
+    #[test]
+    fn test_is_admin_true() {
+        let user = make_user(12345, "Admin", None);
+        assert!(is_admin(&user, 12345));
+    }
+
+    #[test]
+    fn test_is_admin_false() {
+        let user = make_user(12345, "User", None);
+        assert!(!is_admin(&user, 99999));
+    }
+
+    #[test]
+    fn test_is_admin_zero() {
+        let user = make_user(0, "Zero", None);
+        assert!(is_admin(&user, 0));
+    }
+}

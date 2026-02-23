@@ -808,3 +808,50 @@ fn format_date_ru(date_str: &str) -> String {
     }
     format!("{}.{}", parts[2], parts[1]) // "26.02"
 }
+
+// ── Tests ──
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_date_ru_basic() {
+        assert_eq!(format_date_ru("2026-02-25"), "25.02");
+    }
+
+    #[test]
+    fn test_format_date_ru_single_digit_day() {
+        assert_eq!(format_date_ru("2026-03-05"), "05.03");
+    }
+
+    #[test]
+    fn test_format_date_ru_december() {
+        assert_eq!(format_date_ru("2026-12-31"), "31.12");
+    }
+
+    #[test]
+    fn test_format_date_ru_january() {
+        assert_eq!(format_date_ru("2026-01-01"), "01.01");
+    }
+
+    #[test]
+    fn test_format_date_ru_no_dashes() {
+        assert_eq!(format_date_ru("20260225"), "20260225");
+    }
+
+    #[test]
+    fn test_format_date_ru_empty() {
+        assert_eq!(format_date_ru(""), "");
+    }
+
+    #[test]
+    fn test_format_date_ru_too_many_dashes() {
+        assert_eq!(format_date_ru("2026-02-25-extra"), "2026-02-25-extra");
+    }
+
+    #[test]
+    fn test_format_date_ru_two_parts() {
+        assert_eq!(format_date_ru("2026-02"), "2026-02");
+    }
+}

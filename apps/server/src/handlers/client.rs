@@ -898,3 +898,353 @@ fn add_minutes_to_time(time: &str, minutes: u32) -> String {
     let total = hour * 60 + min + minutes;
     format!("{:02}:{:02}", (total / 60).min(23), total % 60)
 }
+
+// ── Tests ──
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper: build an AvailableSlot without boilerplate.
+    fn make_slot(id: i64, date: &str, start: &str, end: &str, booked: bool) -> AvailableSlot {
+        AvailableSlot {
+            id,
+            date: date.to_string(),
+            start_time: start.to_string(),
+            end_time: end.to_string(),
+            is_booked: booked,
+            booking_id: if booked { Some(100 + id) } else { None },
+        }
+    }
+
+    // ── slots_needed_for_duration ──
+
+    #[test]
+    fn test_slots_needed_exact_hour() {
+        assert_eq!(slots_needed_for_duration(60), 1);
+    }
+
+    #[test]
+    fn test_slots_needed_two_hours() {
+        assert_eq!(slots_needed_for_duration(120), 2);
+    }
+
+    #[test]
+    fn test_slots_needed_round_up() {
+        assert_eq!(slots_needed_for_duration(90), 2);
+    }
+
+    #[test]
+    fn test_slots_needed_small() {
+        assert_eq!(slots_needed_for_duration(30), 1);
+    }
+
+    #[test]
+    fn test_slots_needed_three_hours() {
+        assert_eq!(slots_needed_for_duration(180), 3);
+    }
+
+    #[test]
+    fn test_slots_needed_just_over() {
+        assert_eq!(slots_needed_for_duration(61), 2);
+    }
+
+    // ── days_between ──
+
+    #[test]
+    fn test_days_between_same_day() {
+        assert_eq!(days_between("2026-03-01", "2026-03-01"), 0);
+    }
+
+    #[test]
+    fn test_days_between_one_day() {
+        assert_eq!(days_between("2026-03-01", "2026-03-02"), 1);
+    }
+
+    #[test]
+    fn test_days_between_negative() {
+        assert_eq!(days_between("2026-03-05", "2026-03-01"), -4);
+    }
+
+    #[test]
+    fn test_days_between_large_gap() {
+        assert_eq!(days_between("2026-01-01", "2026-12-31"), 364);
+    }
+
+    #[test]
+    fn test_days_between_invalid_from() {
+        assert_eq!(days_between("not-a-date", "2026-03-01"), 999);
+    }
+
+    #[test]
+    fn test_days_between_invalid_to() {
+        assert_eq!(days_between("2026-03-01", "garbage"), 999);
+    }
+
+    #[test]
+    fn test_days_between_both_invalid() {
+        assert_eq!(days_between("x", "y"), 999);
+    }
+
+    #[test]
+    fn test_days_between_tight_boundary() {
+        // TIGHT_MODE_DAYS = 3: 2 days is within tight range
+        assert!(days_between("2026-03-01", "2026-03-03") <= TIGHT_MODE_DAYS);
+    }
+
+    // ── add_minutes_to_time ──
+
+    #[test]
+    fn test_add_minutes_basic() {
+        assert_eq!(add_minutes_to_time("10:00", 60), "11:00");
+    }
+
+    #[test]
+    fn test_add_minutes_half() {
+        assert_eq!(add_minutes_to_time("10:00", 30), "10:30");
+    }
+
+    #[test]
+    fn test_add_minutes_zero() {
+        assert_eq!(add_minutes_to_time("10:00", 0), "10:00");
+    }
+
+    #[test]
+    fn test_add_minutes_cross_hour() {
+        assert_eq!(add_minutes_to_time("10:45", 30), "11:15");
+    }
+
+    #[test]
+    fn test_add_minutes_cap_at_23() {
+        assert_eq!(add_minutes_to_time("22:00", 180), "23:00");
+    }
+
+    #[test]
+    fn test_add_minutes_already_23() {
+        assert_eq!(add_minutes_to_time("23:00", 60), "23:00");
+    }
+
+    #[test]
+    fn test_add_minutes_invalid_format() {
+        assert_eq!(add_minutes_to_time("garbage", 30), "garbage");
+    }
+
+    #[test]
+    fn test_add_minutes_midnight() {
+        assert_eq!(add_minutes_to_time("00:00", 60), "01:00");
+    }
+
+    #[test]
+    fn test_add_minutes_large() {
+        assert_eq!(add_minutes_to_time("12:00", 480), "20:00");
+    }
+
+    // ── has_consecutive_free_slots ──
+
+    #[test]
+    fn test_consecutive_single_free() {
+        let slots = vec![make_slot(1, "2026-03-01", "10:00", "11:00", false)];
+        assert!(has_consecutive_free_slots(&slots, 1));
+    }
+
+    #[test]
+    fn test_consecutive_empty() {
+        let slots: Vec<AvailableSlot> = vec![];
+        assert!(!has_consecutive_free_slots(&slots, 1));
+    }
+
+    #[test]
+    fn test_consecutive_all_booked() {
+        let slots = vec![
+            make_slot(1, "2026-03-01", "10:00", "11:00", true),
+            make_slot(2, "2026-03-01", "11:00", "12:00", true),
+        ];
+        assert!(!has_consecutive_free_slots(&slots, 1));
+    }
+
+    #[test]
+    fn test_consecutive_two_adjacent_free() {
+        let slots = vec![
+            make_slot(1, "2026-03-01", "10:00", "11:00", false),
+            make_slot(2, "2026-03-01", "11:00", "12:00", false),
+        ];
+        assert!(has_consecutive_free_slots(&slots, 2));
+    }
+
+    #[test]
+    fn test_consecutive_two_with_gap() {
+        let slots = vec![
+            make_slot(1, "2026-03-01", "10:00", "11:00", false),
+            make_slot(2, "2026-03-01", "12:00", "13:00", false), // gap
+        ];
+        assert!(!has_consecutive_free_slots(&slots, 2));
+    }
+
+    #[test]
+    fn test_consecutive_booked_then_free() {
+        let slots = vec![
+            make_slot(1, "2026-03-01", "10:00", "11:00", true),
+            make_slot(2, "2026-03-01", "11:00", "12:00", false),
+            make_slot(3, "2026-03-01", "12:00", "13:00", false),
+        ];
+        assert!(has_consecutive_free_slots(&slots, 2));
+    }
+
+    #[test]
+    fn test_consecutive_not_enough() {
+        let slots = vec![make_slot(1, "2026-03-01", "10:00", "11:00", false)];
+        assert!(!has_consecutive_free_slots(&slots, 2));
+    }
+
+    #[test]
+    fn test_consecutive_three_middle_booked() {
+        let slots = vec![
+            make_slot(1, "2026-03-01", "10:00", "11:00", false),
+            make_slot(2, "2026-03-01", "11:00", "12:00", true),
+            make_slot(3, "2026-03-01", "12:00", "13:00", false),
+        ];
+        assert!(!has_consecutive_free_slots(&slots, 2));
+    }
+
+    #[test]
+    fn test_consecutive_need_three() {
+        let slots = vec![
+            make_slot(1, "2026-03-01", "10:00", "11:00", false),
+            make_slot(2, "2026-03-01", "11:00", "12:00", false),
+            make_slot(3, "2026-03-01", "12:00", "13:00", false),
+        ];
+        assert!(has_consecutive_free_slots(&slots, 3));
+    }
+
+    // ── is_adjacent_to_booked ──
+
+    #[test]
+    fn test_adjacent_block_starts_where_booked_ends() {
+        let slots = vec![make_slot(1, "2026-03-01", "09:00", "10:00", true)];
+        assert!(is_adjacent_to_booked("10:00", "11:00", &slots));
+    }
+
+    #[test]
+    fn test_adjacent_block_ends_where_booked_starts() {
+        let slots = vec![make_slot(1, "2026-03-01", "13:00", "14:00", true)];
+        assert!(is_adjacent_to_booked("12:00", "13:00", &slots));
+    }
+
+    #[test]
+    fn test_adjacent_no_match() {
+        let slots = vec![make_slot(1, "2026-03-01", "15:00", "16:00", true)];
+        assert!(!is_adjacent_to_booked("10:00", "11:00", &slots));
+    }
+
+    #[test]
+    fn test_adjacent_free_slot_ignored() {
+        let slots = vec![make_slot(1, "2026-03-01", "09:00", "10:00", false)];
+        assert!(!is_adjacent_to_booked("10:00", "11:00", &slots));
+    }
+
+    #[test]
+    fn test_adjacent_empty_slots() {
+        let slots: Vec<AvailableSlot> = vec![];
+        assert!(!is_adjacent_to_booked("10:00", "11:00", &slots));
+    }
+
+    // ── find_bookable_blocks ──
+
+    #[test]
+    fn test_bookable_free_mode_single_slot() {
+        let slots = vec![
+            make_slot(1, "2026-03-01", "10:00", "11:00", false),
+            make_slot(2, "2026-03-01", "11:00", "12:00", false),
+            make_slot(3, "2026-03-01", "12:00", "13:00", false),
+        ];
+        let blocks = find_bookable_blocks(&slots, 1, false);
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(blocks[0].start_time, "10:00");
+        assert_eq!(blocks[2].end_time, "13:00");
+    }
+
+    #[test]
+    fn test_bookable_free_mode_two_slots() {
+        let slots = vec![
+            make_slot(1, "2026-03-01", "10:00", "11:00", false),
+            make_slot(2, "2026-03-01", "11:00", "12:00", false),
+            make_slot(3, "2026-03-01", "12:00", "13:00", false),
+        ];
+        let blocks = find_bookable_blocks(&slots, 2, false);
+        assert_eq!(blocks.len(), 2); // 10-12, 11-13
+        assert_eq!(blocks[0].start_time, "10:00");
+        assert_eq!(blocks[0].end_time, "12:00");
+        assert_eq!(blocks[1].start_time, "11:00");
+        assert_eq!(blocks[1].end_time, "13:00");
+    }
+
+    #[test]
+    fn test_bookable_free_mode_with_booked() {
+        let slots = vec![
+            make_slot(1, "2026-03-01", "10:00", "11:00", false),
+            make_slot(2, "2026-03-01", "11:00", "12:00", true),
+            make_slot(3, "2026-03-01", "12:00", "13:00", false),
+        ];
+        let blocks = find_bookable_blocks(&slots, 1, false);
+        assert_eq!(blocks.len(), 2); // 10-11, 12-13
+    }
+
+    #[test]
+    fn test_bookable_tight_no_bookings() {
+        // No booked slots → tight mode degrades to free mode
+        let slots = vec![
+            make_slot(1, "2026-03-01", "10:00", "11:00", false),
+            make_slot(2, "2026-03-01", "11:00", "12:00", false),
+        ];
+        let blocks = find_bookable_blocks(&slots, 1, true);
+        assert_eq!(blocks.len(), 2); // All shown (has_bookings=false)
+    }
+
+    #[test]
+    fn test_bookable_tight_adjacent_only() {
+        let slots = vec![
+            make_slot(1, "2026-03-01", "10:00", "11:00", false),
+            make_slot(2, "2026-03-01", "11:00", "12:00", true),  // booked
+            make_slot(3, "2026-03-01", "12:00", "13:00", false),
+            make_slot(4, "2026-03-01", "13:00", "14:00", false),
+            make_slot(5, "2026-03-01", "14:00", "15:00", false),
+        ];
+        // Tight mode: only blocks adjacent to booked slot (11-12)
+        // 10-11: end_time 11:00 == booked.start_time 11:00 → adjacent ✓
+        // 12-13: start_time 12:00 == booked.end_time 12:00 → adjacent ✓
+        // 13-14: start 13:00 ≠ 12:00, end 14:00 ≠ 11:00 → NOT adjacent
+        // 14-15: NOT adjacent
+        let blocks = find_bookable_blocks(&slots, 1, true);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].start_time, "10:00");
+        assert_eq!(blocks[1].start_time, "12:00");
+    }
+
+    #[test]
+    fn test_bookable_empty() {
+        let slots: Vec<AvailableSlot> = vec![];
+        let blocks = find_bookable_blocks(&slots, 1, false);
+        assert_eq!(blocks.len(), 0);
+    }
+
+    #[test]
+    fn test_bookable_tight_two_slot_blocks() {
+        // Need 2-slot blocks in tight mode
+        let slots = vec![
+            make_slot(1, "2026-03-01", "10:00", "11:00", false),
+            make_slot(2, "2026-03-01", "11:00", "12:00", false),
+            make_slot(3, "2026-03-01", "12:00", "13:00", true), // booked
+            make_slot(4, "2026-03-01", "13:00", "14:00", false),
+            make_slot(5, "2026-03-01", "14:00", "15:00", false),
+        ];
+        // 2-slot blocks: 10-12 (end 12:00 == booked.start 12:00 → adj ✓),
+        //                11-13 → slot 12-13 is booked → invalid
+        //                13-15 (start 13:00 == booked.end 13:00 → adj ✓)
+        let blocks = find_bookable_blocks(&slots, 2, true);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].start_time, "10:00");
+        assert_eq!(blocks[0].end_time, "12:00");
+        assert_eq!(blocks[1].start_time, "13:00");
+        assert_eq!(blocks[1].end_time, "15:00");
+    }
+}

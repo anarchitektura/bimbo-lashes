@@ -6,6 +6,7 @@ COPY apps/bot ./apps/bot
 COPY apps/server/Cargo.toml ./apps/server/Cargo.toml
 RUN mkdir -p apps/server/src && echo "fn main(){}" > apps/server/src/main.rs
 RUN cargo build --release --package bimbo-lashes-bot
+RUN cargo test --release --package bimbo-lashes-bot
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
