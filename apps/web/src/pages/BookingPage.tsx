@@ -16,21 +16,20 @@ interface Props {
 type Step = "date" | "time" | "confirm" | "paying" | "done";
 
 const PREPAID_AMOUNT = 500;
+/** Max polling time before giving up (5 minutes). */
+const POLL_TIMEOUT_MS = 5 * 60 * 1000;
 
 export default function BookingPage(props: Props) {
   const [step, setStep] = createSignal<Step>("date");
   const [selectedDate, setSelectedDate] = createSignal<string>("");
   const [selectedTime, setSelectedTime] = createSignal<TimeBlock | null>(null);
-  const [bookingMode, setBookingMode] = createSignal<"free" | "tight">("free");
   const [loading, setLoading] = createSignal(false);
   const [error, setError] = createSignal("");
-  const [bookingId, setBookingId] = createSignal<number | null>(null);
   const [paymentUrl, setPaymentUrl] = createSignal<string | null>(null);
   let pollTimer: ReturnType<typeof setInterval> | undefined;
+  let pollTimeout: ReturnType<typeof setTimeout> | undefined;
 
-  onCleanup(() => {
-    if (pollTimer) clearInterval(pollTimer);
-  });
+  onCleanup(() => stopPolling());
 
   // Fetch available times when date is selected
   const [timesData] = createResource(
@@ -49,33 +48,41 @@ export default function BookingPage(props: Props) {
   const selectTime = (time: TimeBlock) => {
     WebApp.HapticFeedback.selectionChanged();
     setSelectedTime(time);
-    if (timesData()) {
-      setBookingMode(timesData()!.mode);
-    }
     setStep("confirm");
   };
 
+  const stopPolling = () => {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = undefined; }
+    if (pollTimeout) { clearTimeout(pollTimeout); pollTimeout = undefined; }
+  };
+
   const startPolling = (id: number) => {
-    if (pollTimer) clearInterval(pollTimer);
+    stopPolling();
+
     pollTimer = setInterval(async () => {
       try {
         const status = await api.getBookingStatus(id);
         if (status.payment_status === "paid" && status.status === "confirmed") {
-          clearInterval(pollTimer);
-          pollTimer = undefined;
+          stopPolling();
           WebApp.HapticFeedback.notificationOccurred("success");
           setStep("done");
         } else if (status.status === "expired" || status.status === "cancelled") {
-          clearInterval(pollTimer);
-          pollTimer = undefined;
+          stopPolling();
           WebApp.HapticFeedback.notificationOccurred("error");
           setError("Время оплаты истекло. Попробуйте снова.");
           setStep("confirm");
         }
       } catch {
-        // Ignore polling errors
+        // Ignore polling errors — will retry on next interval
       }
     }, 3000);
+
+    // Safety timeout: stop polling after POLL_TIMEOUT_MS
+    pollTimeout = setTimeout(() => {
+      stopPolling();
+      setError("Не удалось подтвердить оплату. Проверьте раздел «Мои записи».");
+      setStep("confirm");
+    }, POLL_TIMEOUT_MS);
   };
 
   const confirmBooking = async () => {
@@ -92,8 +99,6 @@ export default function BookingPage(props: Props) {
         time.start_time,
         props.withLowerLashes
       );
-
-      setBookingId(result.booking.id);
 
       if (result.payment_url) {
         setPaymentUrl(result.payment_url);
@@ -322,7 +327,7 @@ export default function BookingPage(props: Props) {
             <button
               class="btn-secondary w-full"
               onClick={() => {
-                if (pollTimer) clearInterval(pollTimer);
+                stopPolling();
                 setStep("confirm");
                 setError("");
               }}

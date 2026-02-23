@@ -13,6 +13,9 @@ use crate::{models::TelegramUser, AppState};
 
 type HmacSha256 = Hmac<Sha256>;
 
+/// Maximum age of initData before it's considered expired (24 hours).
+const MAX_AUTH_AGE_SECS: i64 = 86400;
+
 /// Validates Telegram Mini App initData and extracts user info.
 /// See: https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
 pub fn validate_init_data(init_data: &str, bot_token: &str) -> Option<TelegramUser> {
@@ -21,6 +24,21 @@ pub fn validate_init_data(init_data: &str, bot_token: &str) -> Option<TelegramUs
         .collect();
 
     let hash = params.get("hash")?;
+
+    // Verify auth_date is recent (prevent replay attacks)
+    if let Some(auth_date_str) = params.get("auth_date") {
+        if let Ok(auth_date) = auth_date_str.parse::<i64>() {
+            let now = chrono::Utc::now().timestamp();
+            if (now - auth_date) > MAX_AUTH_AGE_SECS {
+                tracing::warn!(
+                    "initData expired: auth_date={}, age={}s",
+                    auth_date,
+                    now - auth_date
+                );
+                return None;
+            }
+        }
+    }
 
     // Build data-check-string (sorted key=value pairs, excluding hash)
     let data_check_string: String = params
@@ -61,6 +79,7 @@ pub fn extract_user_from_header(auth_header: &str, bot_token: &str) -> Option<Te
 
 /// Axum middleware that validates Telegram auth on every request.
 /// Stores TelegramUser in request extensions.
+#[allow(dead_code)]
 pub async fn require_auth(
     State(state): State<Arc<AppState>>,
     mut req: Request,

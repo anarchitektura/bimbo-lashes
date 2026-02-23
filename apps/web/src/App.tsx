@@ -1,4 +1,4 @@
-import { Match, Switch, onMount } from "solid-js";
+import { createEffect, Match, Switch, onMount } from "solid-js";
 import WebApp from "@twa-dev/sdk";
 import { route, goHome, goAdmin } from "./lib/router";
 import HomePage from "./pages/HomePage";
@@ -14,7 +14,6 @@ export default function App() {
     WebApp.BackButton.onClick(() => {
       const r = route();
       if (r.page === "admin-schedule" || r.page === "admin-services") {
-        // Go back to admin from sub-pages
         goAdmin();
       } else {
         goHome();
@@ -22,14 +21,17 @@ export default function App() {
     });
   });
 
-  // Show/hide back button based on route
-  const showBack = () => route().page !== "home";
+  // Show/hide back button reactively based on route
+  createEffect(() => {
+    if (route().page !== "home") {
+      WebApp.BackButton.show();
+    } else {
+      WebApp.BackButton.hide();
+    }
+  });
 
   return (
     <div class="min-h-screen pb-4 safe-bottom">
-      {showBack()
-        ? WebApp.BackButton.show()
-        : WebApp.BackButton.hide()}
 
       <Switch>
         <Match when={route().page === "home"}>

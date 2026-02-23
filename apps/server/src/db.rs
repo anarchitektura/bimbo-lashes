@@ -164,6 +164,35 @@ pub async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         tracing::info!("Applied migration: 006_payments");
     }
 
+    // 007: Add performance indexes
+    let indexes_applied: bool = sqlx::query_scalar(
+        "SELECT COUNT(*) > 0 FROM _migrations WHERE name = '007_indexes'"
+    )
+    .fetch_one(pool)
+    .await?;
+
+    if !indexes_applied {
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_bookings_client_tg_id ON bookings(client_tg_id)")
+            .execute(pool).await.ok();
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_bookings_date ON bookings(date)")
+            .execute(pool).await.ok();
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_bookings_status ON bookings(status)")
+            .execute(pool).await.ok();
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_bookings_payment_status ON bookings(payment_status)")
+            .execute(pool).await.ok();
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_slots_date ON available_slots(date)")
+            .execute(pool).await.ok();
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_slots_booking_id ON available_slots(booking_id)")
+            .execute(pool).await.ok();
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_slots_date_booked ON available_slots(date, is_booked)")
+            .execute(pool).await.ok();
+
+        sqlx::query("INSERT INTO _migrations (name) VALUES ('007_indexes')")
+            .execute(pool)
+            .await?;
+        tracing::info!("Applied migration: 007_indexes");
+    }
+
     tracing::info!("Database migrations up to date");
     Ok(())
 }

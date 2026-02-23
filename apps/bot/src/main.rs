@@ -474,11 +474,12 @@ async fn handle_callback(
                     COALESCE(b.date, sl.date) as date,
                     COALESCE(b.start_time, sl.start_time) as start_time,
                     COALESCE(b.end_time, sl.end_time) as end_time,
-                    b.client_tg_id, b.client_username, b.client_first_name
+                    b.client_tg_id, b.client_username, b.client_first_name,
+                    b.payment_status, b.prepaid_amount
              FROM bookings b
              JOIN services s ON s.id = b.service_id
              LEFT JOIN available_slots sl ON sl.id = b.slot_id
-             WHERE b.id = ? AND b.client_tg_id = ? AND b.status = 'confirmed'",
+             WHERE b.id = ? AND b.client_tg_id = ? AND b.status IN ('confirmed', 'pending_payment')",
         )
         .bind(booking_id)
         .bind(user_id)
@@ -487,7 +488,7 @@ async fn handle_callback(
 
         if let Some(b) = booking {
             sqlx::query(
-                "UPDATE bookings SET status = 'cancelled', cancelled_at = datetime('now') WHERE id = ?",
+                "UPDATE bookings SET status = 'cancelled', cancelled_at = datetime('now', '+3 hours') WHERE id = ?",
             )
             .bind(booking_id)
             .execute(&state.pool)
@@ -563,11 +564,12 @@ async fn handle_callback(
                     COALESCE(b.date, sl.date) as date,
                     COALESCE(b.start_time, sl.start_time) as start_time,
                     COALESCE(b.end_time, sl.end_time) as end_time,
-                    b.client_tg_id, b.client_username, b.client_first_name
+                    b.client_tg_id, b.client_username, b.client_first_name,
+                    b.payment_status, b.prepaid_amount
              FROM bookings b
              JOIN services s ON s.id = b.service_id
              LEFT JOIN available_slots sl ON sl.id = b.slot_id
-             WHERE b.id = ? AND b.status = 'confirmed'",
+             WHERE b.id = ? AND b.status IN ('confirmed', 'pending_payment')",
         )
         .bind(booking_id)
         .fetch_optional(&state.pool)
@@ -575,7 +577,7 @@ async fn handle_callback(
 
         if let Some(b) = booking {
             sqlx::query(
-                "UPDATE bookings SET status = 'cancelled', cancelled_at = datetime('now') WHERE id = ?",
+                "UPDATE bookings SET status = 'cancelled', cancelled_at = datetime('now', '+3 hours') WHERE id = ?",
             )
             .bind(booking_id)
             .execute(&state.pool)
@@ -761,6 +763,10 @@ async fn send_reminders(bot: Bot, pool: sqlx::SqlitePool) {
         .bind(&tomorrow)
         .fetch_all(&pool)
         .await;
+
+        if let Err(e) = &bookings {
+            tracing::error!("Reminder query failed: {}", e);
+        }
 
         if let Ok(bookings) = bookings {
             for booking in bookings {
