@@ -118,25 +118,40 @@ jobs:
             else
               echo "=== Health check FAILED ==="
 
+              # Capture recent container logs for diagnostics
+              LOGS=$(docker compose logs --tail=30 --no-color server 2>&1 | tail -20 || echo "No logs available")
+
               # Only rollback if previous images have /api/health support
               if docker run --rm "bimbo-lashes-server:previous" sh -c "test -f /usr/bin/curl" 2>/dev/null; then
                 echo "Rolling back..."
                 if ./scripts/rollback.sh; then
-                  ./scripts/notify.sh "Deploy FAILED for $COMMIT_SHA, rolled back"
+                  ./scripts/notify.sh "$(printf '🔴 <b>Deploy FAILED</b> (%s), rolled back\n\nLast server logs:\n<pre>%s</pre>' "$COMMIT_SHA" "$LOGS")"
                 else
-                  ./scripts/notify.sh "CRITICAL: Deploy $COMMIT_SHA failed AND rollback failed!"
+                  ./scripts/notify.sh "$(printf '🚨 <b>CRITICAL</b>: Deploy %s failed AND rollback failed!\n\nLast server logs:\n<pre>%s</pre>' "$COMMIT_SHA" "$LOGS")"
                 fi
               else
                 echo "SKIP rollback: previous images incompatible (first DevOps deploy)"
-                ./scripts/notify.sh "Deploy FAILED for $COMMIT_SHA. No rollback available (first deploy)."
+                ./scripts/notify.sh "$(printf '🔴 <b>Deploy FAILED</b> (%s). No rollback available.\n\nLast server logs:\n<pre>%s</pre>' "$COMMIT_SHA" "$LOGS")"
               fi
               exit 1
             fi
 
       - name: Notify on SSH failure
         if: failure() && steps.ssh_deploy.outcome == 'failure'
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          ADMIN_TG_ID: ${{ secrets.ADMIN_TG_ID }}
+          SHA: ${{ steps.commit.outputs.sha_short }}
+          ACTOR: ${{ github.actor }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          curl -sf -X POST "https://api.telegram.org/bot${{ secrets.BOT_TOKEN }}/sendMessage" \
+          TEXT=$(printf '🔴 <b>Deploy FAILED</b> — SSH error\n\n📦 <code>%s</code> by %s\n\n🔗 <a href="%s">Actions log</a>' \
+            "$SHA" "$ACTOR" "$RUN_URL")
+
+          curl -sf -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
             -H "Content-Type: application/json" \
-            -d '{"chat_id": ${{ secrets.ADMIN_TG_ID }}, "text": "Deploy FAILED: SSH connection error (${{ steps.commit.outputs.sha_short }}). Check GitHub Actions logs.", "parse_mode": "HTML"}' \
+            -d "$(jq -n \
+              --arg chat "$ADMIN_TG_ID" \
+              --arg text "$TEXT" \
+              '{chat_id: ($chat|tonumber), text: $text, parse_mode: "HTML", disable_web_page_preview: true}')" \
             || echo "WARNING: Could not send Telegram notification"

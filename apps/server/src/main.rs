@@ -3,6 +3,7 @@ mod db;
 mod handlers;
 mod models;
 mod rate_limit;
+mod telegram_layer;
 
 use axum::{
     middleware::from_fn_with_state,
@@ -15,6 +16,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tower_http::trace::TraceLayer;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
 use rate_limit::{
@@ -42,11 +45,7 @@ const RATE_LIMIT_CLEANUP_SECS: u64 = 300;
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse()?))
-        .init();
-
-    // ── Required env vars ──
+    // ── Required env vars (read before tracing so TelegramLayer can use them) ──
     let database_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "sqlite:bimbo.db?mode=rwc".into());
     let bot_token = std::env::var("BOT_TOKEN").expect("BOT_TOKEN must be set");
@@ -54,6 +53,20 @@ async fn main() -> anyhow::Result<()> {
         .expect("ADMIN_TG_ID must be set")
         .parse()
         .expect("ADMIN_TG_ID must be a number");
+
+    // ── Tracing: console + optional Telegram error notifications ──
+    let env_filter = EnvFilter::from_default_env().add_directive("info".parse()?);
+    let fmt_layer = tracing_subscriber::fmt::layer();
+    let registry = tracing_subscriber::registry()
+        .with(env_filter)
+        .with(fmt_layer);
+
+    if !bot_token.is_empty() {
+        let tg_layer = telegram_layer::TelegramLayer::new(bot_token.clone(), admin_tg_id);
+        registry.with(tg_layer).init();
+    } else {
+        registry.init();
+    }
     let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".into());
     let port = std::env::var("PORT").unwrap_or_else(|_| "3000".into());
 
