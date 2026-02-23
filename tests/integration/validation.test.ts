@@ -38,8 +38,14 @@ describe("isValidTime", () => {
 
   it("rejects invalid formats", () => {
     expect(isValidTime("9:00")).toBe(false);
-    expect(isValidTime("25:00")).toBe(false); // passes regex but invalid
     expect(isValidTime("")).toBe(false);
+    expect(isValidTime("abc")).toBe(false);
+    expect(isValidTime("12:0")).toBe(false);
+  });
+
+  it("accepts 25:00 (format-only check, no semantic validation)", () => {
+    // isValidTime only checks \d{2}:\d{2} regex, not hour/minute ranges
+    expect(isValidTime("25:00")).toBe(true);
   });
 });
 

@@ -57,11 +57,66 @@ jobs:
       - run: npm ci
       - run: npm run build
 
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      # Validation tests (pure functions, no server needed)
+      - name: Run validation tests
+        run: cd tests/integration && npm ci && npx vitest run validation
+
+      # API tests (need a running server)
+      - name: Build server
+        run: cargo build --package bimbo-lashes-server
+
+      - name: Start server
+        run: |
+          DATABASE_URL=sqlite:test.db?mode=rwc \
+          BOT_TOKEN=7777777777:AAFake_Test_Token_For_Unit_Tests \
+          ADMIN_TG_ID=12345 \
+          WEBAPP_URL=https://example.com \
+          YOOKASSA_SHOP_ID=test \
+          YOOKASSA_SECRET_KEY=test \
+          HOST=0.0.0.0 \
+          PORT=3000 \
+          ./target/debug/bimbo-lashes-server &
+          # Wait for server to be ready
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000/api/health > /dev/null 2>&1; then
+              echo "Server ready after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Run API tests
+        run: cd tests/integration && npx vitest run api
+
   docker-build:
     name: Docker Build Test
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: [rust-check, web-build]
+    needs: [rust-check, web-build, integration-tests]
     steps:
       - uses: actions/checkout@v4
       - name: Build all images
