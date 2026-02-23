@@ -38,6 +38,8 @@ struct BookingInfo {
     client_tg_id: i64,
     client_username: Option<String>,
     client_first_name: String,
+    payment_status: String,
+    prepaid_amount: i64,
 }
 
 #[derive(Clone)]
@@ -165,12 +167,13 @@ async fn handle_command(
                         COALESCE(b.date, sl.date) as date,
                         COALESCE(b.start_time, sl.start_time) as start_time,
                         COALESCE(b.end_time, sl.end_time) as end_time,
-                        b.client_tg_id, b.client_username, b.client_first_name
+                        b.client_tg_id, b.client_username, b.client_first_name,
+                        b.payment_status, b.prepaid_amount
                  FROM bookings b
                  JOIN services s ON s.id = b.service_id
                  LEFT JOIN available_slots sl ON sl.id = b.slot_id
-                 WHERE b.client_tg_id = ? AND b.status = 'confirmed'
-                 AND COALESCE(b.date, sl.date) >= date('now')
+                 WHERE b.client_tg_id = ? AND b.status IN ('confirmed', 'pending_payment')
+                 AND COALESCE(b.date, sl.date) >= date('now', '+3 hours')
                  ORDER BY COALESCE(b.date, sl.date) ASC, COALESCE(b.start_time, sl.start_time) ASC",
             )
             .bind(user_id)
@@ -193,13 +196,19 @@ async fn handle_command(
             } else {
                 let mut text = "📋 <b>Твои записи:</b>\n\n".to_string();
                 for b in &bookings {
+                    let payment_badge = match b.payment_status.as_str() {
+                        "paid" => format!("💳 {} ₽", b.prepaid_amount),
+                        "pending" => "⏳ ожидание оплаты".to_string(),
+                        _ => String::new(),
+                    };
                     text.push_str(&format!(
-                        "💅 <b>{}</b>\n📅 {} · {} — {}\n💰 {} ₽\n\n",
+                        "💅 <b>{}</b>\n📅 {} · {} — {}\n💰 {} ₽{}\n\n",
                         b.service_name,
                         format_date_ru(&b.date),
                         &b.start_time[..5],
                         &b.end_time[..5],
                         b.service_price,
+                        if payment_badge.is_empty() { "".to_string() } else { format!(" · {}", payment_badge) },
                     ));
                 }
 
@@ -382,7 +391,7 @@ async fn handle_command(
                         sqlx::query_as::<_, (String, String)>(
                             "SELECT s.name, b.client_first_name
                              FROM bookings b JOIN services s ON s.id = b.service_id
-                             WHERE b.id = ? AND b.status = 'confirmed'"
+                             WHERE b.id = ? AND b.status IN ('confirmed', 'pending_payment')"
                         )
                         .bind(bid)
                         .fetch_optional(&state.pool)
@@ -640,11 +649,12 @@ async fn send_day_bookings(
                 COALESCE(b.date, sl.date) as date,
                 COALESCE(b.start_time, sl.start_time) as start_time,
                 COALESCE(b.end_time, sl.end_time) as end_time,
-                b.client_tg_id, b.client_username, b.client_first_name
+                b.client_tg_id, b.client_username, b.client_first_name,
+                b.payment_status, b.prepaid_amount
          FROM bookings b
          JOIN services s ON s.id = b.service_id
          LEFT JOIN available_slots sl ON sl.id = b.slot_id
-         WHERE COALESCE(b.date, sl.date) = ? AND b.status = 'confirmed'
+         WHERE COALESCE(b.date, sl.date) = ? AND b.status IN ('confirmed', 'pending_payment')
          ORDER BY COALESCE(b.start_time, sl.start_time) ASC",
     )
     .bind(date)
@@ -675,14 +685,20 @@ async fn send_day_bookings(
             .map(|u| format!("@{}", u))
             .unwrap_or_else(|| b.client_first_name.clone());
 
+        let payment_badge = match b.payment_status.as_str() {
+            "paid" => format!(" · 💳 {} ₽", b.prepaid_amount),
+            "pending" => " · ⏳".to_string(),
+            _ => String::new(),
+        };
         text.push_str(&format!(
-            "{}. <b>{} — {}</b>\n   👤 {} · 💅 {}\n   💰 {} ₽\n\n",
+            "{}. <b>{} — {}</b>\n   👤 {} · 💅 {}\n   💰 {} ₽{}\n\n",
             i + 1,
             &b.start_time[..5],
             &b.end_time[..5],
             mention,
             b.service_name,
             b.service_price,
+            payment_badge,
         ));
     }
 
@@ -735,7 +751,8 @@ async fn send_reminders(bot: Bot, pool: sqlx::SqlitePool) {
                     COALESCE(b.date, sl.date) as date,
                     COALESCE(b.start_time, sl.start_time) as start_time,
                     COALESCE(b.end_time, sl.end_time) as end_time,
-                    b.client_tg_id, b.client_username, b.client_first_name
+                    b.client_tg_id, b.client_username, b.client_first_name,
+                    b.payment_status, b.prepaid_amount
              FROM bookings b
              JOIN services s ON s.id = b.service_id
              LEFT JOIN available_slots sl ON sl.id = b.slot_id

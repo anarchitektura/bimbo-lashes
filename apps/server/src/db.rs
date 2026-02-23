@@ -143,6 +143,27 @@ pub async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
         tracing::info!("Applied migration: 005_smart_slots");
     }
 
+    // 006: Payment support (YooKassa prepayment)
+    let payment_applied: bool = sqlx::query_scalar(
+        "SELECT COUNT(*) > 0 FROM _migrations WHERE name = '006_payments'"
+    )
+    .fetch_one(pool)
+    .await?;
+
+    if !payment_applied {
+        sqlx::query("ALTER TABLE bookings ADD COLUMN payment_status TEXT NOT NULL DEFAULT 'none'")
+            .execute(pool).await.ok();
+        sqlx::query("ALTER TABLE bookings ADD COLUMN yookassa_payment_id TEXT")
+            .execute(pool).await.ok();
+        sqlx::query("ALTER TABLE bookings ADD COLUMN prepaid_amount INTEGER NOT NULL DEFAULT 0")
+            .execute(pool).await.ok();
+
+        sqlx::query("INSERT INTO _migrations (name) VALUES ('006_payments')")
+            .execute(pool)
+            .await?;
+        tracing::info!("Applied migration: 006_payments");
+    }
+
     tracing::info!("Database migrations up to date");
     Ok(())
 }

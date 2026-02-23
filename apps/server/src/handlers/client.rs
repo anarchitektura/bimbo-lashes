@@ -239,12 +239,12 @@ pub async fn available_times(
     })))
 }
 
-/// POST /api/bookings — create a new booking (smart multi-slot)
+/// POST /api/bookings — create a new booking with YooKassa prepayment
 pub async fn create_booking(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
     Json(body): Json<CreateBookingRequest>,
-) -> Result<Json<ApiResponse<BookingDetail>>, (StatusCode, Json<ApiResponse<()>>)> {
+) -> Result<Json<ApiResponse<CreateBookingResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
     let auth_header = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok());
@@ -309,12 +309,16 @@ pub async fn create_booking(
         0
     };
     let total_price = service.price + addon_price;
+    let prepaid_amount: i64 = 500;
 
-    // Create booking (slot_id = first slot for backward compat)
+    // Create booking as pending_payment
     let first_slot_id = slots[0].id;
+    let created_at = moscow_now().format("%Y-%m-%d %H:%M:%S").to_string();
     let booking_id = sqlx::query(
-        "INSERT INTO bookings (service_id, slot_id, client_tg_id, client_username, client_first_name, status, date, start_time, end_time, with_lower_lashes)
-         VALUES (?, ?, ?, ?, ?, 'confirmed', ?, ?, ?, ?)"
+        "INSERT INTO bookings (service_id, slot_id, client_tg_id, client_username, client_first_name,
+         status, date, start_time, end_time, with_lower_lashes,
+         payment_status, prepaid_amount, created_at)
+         VALUES (?, ?, ?, ?, ?, 'pending_payment', ?, ?, ?, ?, 'pending', ?, ?)"
     )
     .bind(body.service_id)
     .bind(first_slot_id)
@@ -325,12 +329,14 @@ pub async fn create_booking(
     .bind(&body.start_time)
     .bind(&end_time)
     .bind(body.with_lower_lashes)
+    .bind(prepaid_amount)
+    .bind(&created_at)
     .execute(&state.db)
     .await
     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::error("DB error"))))?
     .last_insert_rowid();
 
-    // Mark all slots as booked with this booking_id
+    // Lock slots immediately (prevent double booking)
     for slot in &slots {
         sqlx::query("UPDATE available_slots SET is_booked = 1, booking_id = ? WHERE id = ?")
             .bind(booking_id)
@@ -340,24 +346,59 @@ pub async fn create_booking(
             .ok();
     }
 
-    // Notify admin via Telegram bot
-    let mention = user
-        .username
-        .as_ref()
-        .map(|u| format!("@{}", u))
-        .unwrap_or_else(|| user.first_name.clone());
+    // Create YooKassa payment
+    let addon_text_name = if body.with_lower_lashes {
+        format!("{} + нижние", service.name)
+    } else {
+        service.name.clone()
+    };
+    let description = format!("Предоплата: {} на {}", addon_text_name, body.date);
 
-    let addon_text = if body.with_lower_lashes { "\n   + нижние ресницы" } else { "" };
-    let message = format!(
-        "📋 Новая запись!\n\n\
-         👤 {} \n\
-         💅 {}{}\n\
-         📅 {} в {} — {}\n\
-         💰 {} ₽",
-        mention, service.name, addon_text, body.date, body.start_time, end_time, total_price
-    );
+    let payment_result = super::payment::create_yookassa_payment(
+        &state.yookassa_shop_id,
+        &state.yookassa_secret_key,
+        booking_id,
+        prepaid_amount,
+        &description,
+        &state.webapp_url,
+    )
+    .await;
 
-    notify_admin(&state.bot_token, state.admin_tg_id, &message).await;
+    let payment_url = match payment_result {
+        Ok((payment_id, confirmation_url)) => {
+            // Save payment_id
+            sqlx::query("UPDATE bookings SET yookassa_payment_id = ? WHERE id = ?")
+                .bind(&payment_id)
+                .bind(booking_id)
+                .execute(&state.db)
+                .await
+                .ok();
+            Some(confirmation_url)
+        }
+        Err(e) => {
+            tracing::error!("YooKassa payment creation failed: {}", e);
+
+            // Rollback: cancel booking, free slots
+            sqlx::query("UPDATE bookings SET status = 'expired', payment_status = 'none' WHERE id = ?")
+                .bind(booking_id)
+                .execute(&state.db)
+                .await
+                .ok();
+            for slot in &slots {
+                sqlx::query("UPDATE available_slots SET is_booked = 0, booking_id = NULL WHERE id = ?")
+                    .bind(slot.id)
+                    .execute(&state.db)
+                    .await
+                    .ok();
+            }
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::error("Ошибка создания платежа. Попробуйте позже.")),
+            ));
+        }
+    };
+
+    // Admin notification comes from webhook after successful payment
 
     let detail = BookingDetail {
         id: booking_id,
@@ -369,16 +410,21 @@ pub async fn create_booking(
         client_tg_id: user.id,
         client_username: user.username,
         client_first_name: user.first_name,
-        status: "confirmed".into(),
-        created_at: moscow_now().format("%Y-%m-%d %H:%M:%S").to_string(),
+        status: "pending_payment".into(),
+        created_at,
         with_lower_lashes: Some(body.with_lower_lashes),
         total_price: Some(total_price),
+        payment_status: Some("pending".into()),
+        prepaid_amount: Some(prepaid_amount),
     };
 
-    Ok(Json(ApiResponse::success(detail)))
+    Ok(Json(ApiResponse::success(CreateBookingResponse {
+        booking: detail,
+        payment_url,
+    })))
 }
 
-/// GET /api/bookings/my — list current user's bookings
+/// GET /api/bookings/my — list current user's bookings (confirmed + pending_payment)
 pub async fn my_bookings(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
@@ -399,11 +445,13 @@ pub async fn my_bookings(
                 CASE WHEN b.with_lower_lashes = 1
                      THEN s.price + COALESCE((SELECT price FROM services WHERE service_type = 'addon' AND is_active = 1 LIMIT 1), 500)
                      ELSE s.price
-                END as total_price
+                END as total_price,
+                b.payment_status,
+                b.prepaid_amount
          FROM bookings b
          JOIN services s ON s.id = b.service_id
          LEFT JOIN available_slots sl ON sl.id = b.slot_id
-         WHERE b.client_tg_id = ? AND b.status = 'confirmed'
+         WHERE b.client_tg_id = ? AND b.status IN ('confirmed', 'pending_payment')
          AND COALESCE(b.date, sl.date) >= date('now', '+3 hours')
          ORDER BY COALESCE(b.date, sl.date) ASC, COALESCE(b.start_time, sl.start_time) ASC"
     )
@@ -415,20 +463,20 @@ pub async fn my_bookings(
     Ok(Json(ApiResponse::success(bookings)))
 }
 
-/// DELETE /api/bookings/:id — cancel a booking
+/// DELETE /api/bookings/:id — cancel a booking (with refund logic)
 pub async fn cancel_booking(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
     Path(id): Path<i64>,
-) -> Result<Json<ApiResponse<&'static str>>, (StatusCode, Json<ApiResponse<()>>)> {
+) -> Result<Json<ApiResponse<CancelBookingResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
     let auth_header = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok());
     let user = extract_user(auth_header, &state.bot_token)?;
 
-    // Verify booking belongs to this user
+    // Verify booking belongs to this user (confirmed or pending_payment)
     let booking = sqlx::query_as::<_, Booking>(
-        "SELECT * FROM bookings WHERE id = ? AND client_tg_id = ? AND status = 'confirmed'"
+        "SELECT * FROM bookings WHERE id = ? AND client_tg_id = ? AND status IN ('confirmed', 'pending_payment')"
     )
     .bind(id)
     .bind(user.id)
@@ -436,6 +484,57 @@ pub async fn cancel_booking(
     .await
     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::error("DB error"))))?
     .ok_or_else(|| (StatusCode::NOT_FOUND, Json(ApiResponse::error("Запись не найдена"))))?;
+
+    let mut refund_info: Option<String> = None;
+
+    // Refund logic
+    if booking.payment_status == "paid" {
+        // Calculate hours until appointment
+        let b_date = booking.date.as_deref().unwrap_or("2099-01-01");
+        let b_time = booking.start_time.as_deref().unwrap_or("00:00");
+        let appointment_str = format!("{} {}", b_date, b_time);
+
+        let hours_until = if let Ok(appointment) =
+            chrono::NaiveDateTime::parse_from_str(&appointment_str, "%Y-%m-%d %H:%M")
+        {
+            let msk = FixedOffset::east_opt(3 * 3600).unwrap();
+            let now = moscow_now().naive_local();
+            (appointment - now).num_hours()
+        } else {
+            999 // Default to refundable
+        };
+
+        if hours_until > 24 {
+            // >24h before appointment → refund
+            if let Some(payment_id) = &booking.yookassa_payment_id {
+                let refund_result = super::payment::create_yookassa_refund(
+                    &state.yookassa_shop_id,
+                    &state.yookassa_secret_key,
+                    payment_id,
+                    booking.prepaid_amount,
+                )
+                .await;
+
+                if refund_result.is_ok() {
+                    sqlx::query("UPDATE bookings SET payment_status = 'refunded' WHERE id = ?")
+                        .bind(id)
+                        .execute(&state.db)
+                        .await
+                        .ok();
+                    refund_info = Some(format!("Предоплата {} ₽ будет возвращена", booking.prepaid_amount));
+                } else {
+                    tracing::error!("Refund failed for booking {}", id);
+                    refund_info = Some("Возврат будет обработан вручную".into());
+                }
+            }
+        } else {
+            // ≤24h → no refund
+            refund_info = Some(format!(
+                "Предоплата {} ₽ не возвращается (отмена менее чем за 24ч)",
+                booking.prepaid_amount
+            ));
+        }
+    }
 
     // Cancel booking
     sqlx::query("UPDATE bookings SET status = 'cancelled', cancelled_at = datetime('now', '+3 hours') WHERE id = ?")
@@ -478,17 +577,49 @@ pub async fn cancel_booking(
     let b_start = booking.start_time.as_deref().unwrap_or("?");
 
     if let Some(svc) = service {
+        let refund_text = refund_info.as_deref().unwrap_or("");
         let message = format!(
             "❌ Отмена записи\n\n\
              👤 {}\n\
              💅 {}\n\
-             📅 {} в {}",
-            mention, svc.name, b_date, b_start
+             📅 {} в {}\n{}",
+            mention, svc.name, b_date, b_start,
+            if refund_text.is_empty() { "".to_string() } else { format!("\n💰 {}", refund_text) }
         );
         notify_admin(&state.bot_token, state.admin_tg_id, &message).await;
     }
 
-    Ok(Json(ApiResponse::success("Запись отменена")))
+    Ok(Json(ApiResponse::success(CancelBookingResponse {
+        message: "Запись отменена".into(),
+        refund_info,
+    })))
+}
+
+/// GET /api/bookings/:id/status — poll booking payment status
+pub async fn booking_status(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<i64>,
+) -> Result<Json<ApiResponse<BookingStatusResponse>>, (StatusCode, Json<ApiResponse<()>>)> {
+    let auth_header = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok());
+    let user = extract_user(auth_header, &state.bot_token)?;
+
+    let result = sqlx::query_as::<_, (String, String)>(
+        "SELECT status, payment_status FROM bookings WHERE id = ? AND client_tg_id = ?"
+    )
+    .bind(id)
+    .bind(user.id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::error("DB error"))))?
+    .ok_or_else(|| (StatusCode::NOT_FOUND, Json(ApiResponse::error("Запись не найдена"))))?;
+
+    Ok(Json(ApiResponse::success(BookingStatusResponse {
+        status: result.0,
+        payment_status: result.1,
+    })))
 }
 
 /// GET /api/calendar?year=2026&month=2&service_id=1 — calendar data with slot stats

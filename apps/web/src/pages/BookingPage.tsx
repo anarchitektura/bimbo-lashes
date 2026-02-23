@@ -1,4 +1,4 @@
-import { createResource, createSignal, For, Show } from "solid-js";
+import { createResource, createSignal, For, Show, onCleanup } from "solid-js";
 import WebApp from "@twa-dev/sdk";
 import { api, type TimeBlock } from "../lib/api";
 import { goHome, goMyBookings } from "../lib/router";
@@ -13,7 +13,9 @@ interface Props {
   withLowerLashes: boolean;
 }
 
-type Step = "date" | "time" | "confirm" | "done";
+type Step = "date" | "time" | "confirm" | "paying" | "done";
+
+const PREPAID_AMOUNT = 500;
 
 export default function BookingPage(props: Props) {
   const [step, setStep] = createSignal<Step>("date");
@@ -22,6 +24,13 @@ export default function BookingPage(props: Props) {
   const [bookingMode, setBookingMode] = createSignal<"free" | "tight">("free");
   const [loading, setLoading] = createSignal(false);
   const [error, setError] = createSignal("");
+  const [bookingId, setBookingId] = createSignal<number | null>(null);
+  const [paymentUrl, setPaymentUrl] = createSignal<string | null>(null);
+  let pollTimer: ReturnType<typeof setInterval> | undefined;
+
+  onCleanup(() => {
+    if (pollTimer) clearInterval(pollTimer);
+  });
 
   // Fetch available times when date is selected
   const [timesData] = createResource(
@@ -46,6 +55,29 @@ export default function BookingPage(props: Props) {
     setStep("confirm");
   };
 
+  const startPolling = (id: number) => {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(async () => {
+      try {
+        const status = await api.getBookingStatus(id);
+        if (status.payment_status === "paid" && status.status === "confirmed") {
+          clearInterval(pollTimer);
+          pollTimer = undefined;
+          WebApp.HapticFeedback.notificationOccurred("success");
+          setStep("done");
+        } else if (status.status === "expired" || status.status === "cancelled") {
+          clearInterval(pollTimer);
+          pollTimer = undefined;
+          WebApp.HapticFeedback.notificationOccurred("error");
+          setError("Время оплаты истекло. Попробуйте снова.");
+          setStep("confirm");
+        }
+      } catch {
+        // Ignore polling errors
+      }
+    }, 3000);
+  };
+
   const confirmBooking = async () => {
     const time = selectedTime();
     if (!time) return;
@@ -54,19 +86,38 @@ export default function BookingPage(props: Props) {
     setError("");
 
     try {
-      await api.createBooking(
+      const result = await api.createBooking(
         props.serviceId,
         selectedDate(),
         time.start_time,
         props.withLowerLashes
       );
-      WebApp.HapticFeedback.notificationOccurred("success");
-      setStep("done");
+
+      setBookingId(result.booking.id);
+
+      if (result.payment_url) {
+        setPaymentUrl(result.payment_url);
+        // Open payment page
+        WebApp.openLink(result.payment_url);
+        setStep("paying");
+        startPolling(result.booking.id);
+      } else {
+        // No payment required (shouldn't happen, but fallback)
+        WebApp.HapticFeedback.notificationOccurred("success");
+        setStep("done");
+      }
     } catch (e: any) {
       WebApp.HapticFeedback.notificationOccurred("error");
       setError(e.message || "Не удалось записаться");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const reopenPayment = () => {
+    const url = paymentUrl();
+    if (url) {
+      WebApp.openLink(url);
     }
   };
 
@@ -84,30 +135,20 @@ export default function BookingPage(props: Props) {
 
       {/* Progress indicator */}
       <div class="px-4 py-3 flex gap-1.5">
-        <div
-          class="h-1 rounded-full flex-1 transition-all duration-300"
-          style={{
-            background: step() !== "done" || step() === "date" || step() === "time" || step() === "confirm"
-              ? "var(--btn)"
-              : "var(--secondary-bg)",
-          }}
-        />
-        <div
-          class="h-1 rounded-full flex-1 transition-all duration-300"
-          style={{
-            background: step() === "time" || step() === "confirm" || step() === "done"
-              ? "var(--btn)"
-              : "var(--secondary-bg)",
-          }}
-        />
-        <div
-          class="h-1 rounded-full flex-1 transition-all duration-300"
-          style={{
-            background: step() === "confirm" || step() === "done"
-              ? "var(--btn)"
-              : "var(--secondary-bg)",
-          }}
-        />
+        {[0, 1, 2, 3].map((i) => (
+          <div
+            class="h-1 rounded-full flex-1 transition-all duration-300"
+            style={{
+              background:
+                (i === 0) ||
+                (i === 1 && ["time", "confirm", "paying", "done"].includes(step())) ||
+                (i === 2 && ["confirm", "paying", "done"].includes(step())) ||
+                (i === 3 && ["paying", "done"].includes(step()))
+                  ? "var(--btn)"
+                  : "var(--secondary-bg)",
+            }}
+          />
+        ))}
       </div>
 
       {/* Step: Select date */}
@@ -176,7 +217,7 @@ export default function BookingPage(props: Props) {
         </div>
       </Show>
 
-      {/* Step: Confirm */}
+      {/* Step: Confirm + Prepayment info */}
       <Show when={step() === "confirm"}>
         <div class="px-4 animate-slide-up">
           <div class="card">
@@ -211,6 +252,28 @@ export default function BookingPage(props: Props) {
             </div>
           </div>
 
+          {/* Prepayment info block */}
+          <div
+            class="mt-3 p-4 rounded-xl"
+            style={{
+              background: "var(--secondary-bg)",
+              border: "1px solid rgba(232, 160, 191, 0.2)",
+            }}
+          >
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-lg">💳</span>
+              <span class="font-semibold text-sm" style={{ color: "var(--text)" }}>
+                Предоплата {formatPrice(PREPAID_AMOUNT)}
+              </span>
+            </div>
+            <p class="text-xs" style={{ color: "var(--hint)" }}>
+              Для подтверждения записи необходима предоплата. Остаток оплачивается на месте.
+            </p>
+            <p class="text-xs mt-1" style={{ color: "var(--hint)" }}>
+              При отмене менее чем за 24 часа предоплата не возвращается.
+            </p>
+          </div>
+
           <Show when={error()}>
             <div
               class="mt-3 p-3 rounded-xl text-sm text-center"
@@ -225,7 +288,7 @@ export default function BookingPage(props: Props) {
             disabled={loading()}
             onClick={confirmBooking}
           >
-            {loading() ? "Записываю..." : "💅 Записаться"}
+            {loading() ? "Создаю запись..." : `💳 Оплатить ${formatPrice(PREPAID_AMOUNT)}`}
           </button>
 
           <button
@@ -235,6 +298,38 @@ export default function BookingPage(props: Props) {
           >
             ← Другое время
           </button>
+        </div>
+      </Show>
+
+      {/* Step: Paying — waiting for payment */}
+      <Show when={step() === "paying"}>
+        <div class="px-4 text-center animate-slide-up py-8">
+          <Loader />
+          <h3 class="text-lg font-bold mt-4 mb-2" style={{ color: "var(--text)" }}>
+            Ожидание оплаты...
+          </h3>
+          <p class="text-sm" style={{ color: "var(--hint)" }}>
+            Завершите оплату в открывшемся окне.
+          </p>
+          <p class="text-sm mt-1" style={{ color: "var(--hint)" }}>
+            Страница обновится автоматически после оплаты.
+          </p>
+
+          <div class="mt-6 flex flex-col gap-2">
+            <button class="btn-primary" onClick={reopenPayment}>
+              🔄 Открыть оплату заново
+            </button>
+            <button
+              class="btn-secondary w-full"
+              onClick={() => {
+                if (pollTimer) clearInterval(pollTimer);
+                setStep("confirm");
+                setError("");
+              }}
+            >
+              ← Назад
+            </button>
+          </div>
         </div>
       </Show>
 
@@ -249,6 +344,12 @@ export default function BookingPage(props: Props) {
           <p class="text-sm" style={{ color: "var(--hint)" }}>
             {friendlyDate(selectedDate())} в {formatTime(selectedTime()!.start_time)}
           </p>
+          <div
+            class="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium"
+            style={{ background: "#e8f5e9", color: "#2e7d32" }}
+          >
+            ✓ Предоплата {formatPrice(PREPAID_AMOUNT)} оплачена
+          </div>
           <p class="text-xs mt-4" style={{ color: "var(--hint)" }}>
             Мы напомним тебе за день до визита 💕
           </p>

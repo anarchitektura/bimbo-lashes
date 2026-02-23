@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 // ── Database models ──
 
@@ -40,6 +41,9 @@ pub struct Booking {
     pub start_time: Option<String>,
     pub end_time: Option<String>,
     pub with_lower_lashes: bool,
+    pub payment_status: String,
+    pub yookassa_payment_id: Option<String>,
+    pub prepaid_amount: i64,
 }
 
 // ── API request/response types ──
@@ -165,6 +169,10 @@ pub struct BookingDetail {
     pub with_lower_lashes: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_price: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payment_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prepaid_amount: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -190,6 +198,40 @@ impl<T: Serialize> ApiResponse<T> {
             error: Some(msg.into()),
         }
     }
+}
+
+// ── Payment types ──
+
+#[derive(Debug, Serialize)]
+pub struct CreateBookingResponse {
+    pub booking: BookingDetail,
+    pub payment_url: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BookingStatusResponse {
+    pub status: String,
+    pub payment_status: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct YooKassaWebhookEvent {
+    pub event: String,
+    pub object: YooKassaPaymentObject,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct YooKassaPaymentObject {
+    pub id: String,
+    pub status: String,
+    pub metadata: Option<Value>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CancelBookingResponse {
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refund_info: Option<String>,
 }
 
 // ── Telegram auth ──

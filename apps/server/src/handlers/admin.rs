@@ -318,11 +318,13 @@ pub async fn list_bookings(
                     CASE WHEN b.with_lower_lashes = 1
                          THEN s.price + COALESCE((SELECT price FROM services WHERE service_type = 'addon' AND is_active = 1 LIMIT 1), 500)
                          ELSE s.price
-                    END as total_price
+                    END as total_price,
+                    b.payment_status,
+                    b.prepaid_amount
              FROM bookings b
              JOIN services s ON s.id = b.service_id
              LEFT JOIN available_slots sl ON sl.id = b.slot_id
-             WHERE COALESCE(b.date, sl.date) = ? AND b.status = 'confirmed'
+             WHERE COALESCE(b.date, sl.date) = ? AND b.status IN ('confirmed', 'pending_payment')
              ORDER BY COALESCE(b.start_time, sl.start_time) ASC"
         )
         .bind(date)
@@ -340,11 +342,13 @@ pub async fn list_bookings(
                     CASE WHEN b.with_lower_lashes = 1
                          THEN s.price + COALESCE((SELECT price FROM services WHERE service_type = 'addon' AND is_active = 1 LIMIT 1), 500)
                          ELSE s.price
-                    END as total_price
+                    END as total_price,
+                    b.payment_status,
+                    b.prepaid_amount
              FROM bookings b
              JOIN services s ON s.id = b.service_id
              LEFT JOIN available_slots sl ON sl.id = b.slot_id
-             WHERE COALESCE(b.date, sl.date) BETWEEN ? AND ? AND b.status = 'confirmed'
+             WHERE COALESCE(b.date, sl.date) BETWEEN ? AND ? AND b.status IN ('confirmed', 'pending_payment')
              ORDER BY COALESCE(b.date, sl.date) ASC, COALESCE(b.start_time, sl.start_time) ASC"
         )
         .bind(from)
@@ -363,11 +367,13 @@ pub async fn list_bookings(
                     CASE WHEN b.with_lower_lashes = 1
                          THEN s.price + COALESCE((SELECT price FROM services WHERE service_type = 'addon' AND is_active = 1 LIMIT 1), 500)
                          ELSE s.price
-                    END as total_price
+                    END as total_price,
+                    b.payment_status,
+                    b.prepaid_amount
              FROM bookings b
              JOIN services s ON s.id = b.service_id
              LEFT JOIN available_slots sl ON sl.id = b.slot_id
-             WHERE COALESCE(b.date, sl.date) >= date('now', '+3 hours') AND b.status = 'confirmed'
+             WHERE COALESCE(b.date, sl.date) >= date('now', '+3 hours') AND b.status IN ('confirmed', 'pending_payment')
              ORDER BY COALESCE(b.date, sl.date) ASC, COALESCE(b.start_time, sl.start_time) ASC"
         )
         .fetch_all(&state.db)
@@ -378,7 +384,7 @@ pub async fn list_bookings(
     Ok(Json(ApiResponse::success(bookings)))
 }
 
-/// POST /api/admin/bookings/:id/cancel — admin cancels a booking
+/// POST /api/admin/bookings/:id/cancel — admin cancels a booking (always refund if paid)
 pub async fn cancel_booking(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
@@ -387,14 +393,38 @@ pub async fn cancel_booking(
     let auth_header = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok());
     extract_admin(auth_header, &state)?;
 
-    let booking = sqlx::query_as::<_, Booking>(
-        "SELECT * FROM bookings WHERE id = ? AND status = 'confirmed'"
+    let booking = sqlx::query_as::<_, crate::models::Booking>(
+        "SELECT * FROM bookings WHERE id = ? AND status IN ('confirmed', 'pending_payment')"
     )
     .bind(id)
     .fetch_optional(&state.db)
     .await
     .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::error("DB error"))))?
     .ok_or_else(|| (StatusCode::NOT_FOUND, Json(ApiResponse::error("Запись не найдена"))))?;
+
+    // Admin cancellation → always refund if paid
+    if booking.payment_status == "paid" {
+        if let Some(payment_id) = &booking.yookassa_payment_id {
+            let refund_result = super::payment::create_yookassa_refund(
+                &state.yookassa_shop_id,
+                &state.yookassa_secret_key,
+                payment_id,
+                booking.prepaid_amount,
+            )
+            .await;
+
+            if refund_result.is_ok() {
+                sqlx::query("UPDATE bookings SET payment_status = 'refunded' WHERE id = ?")
+                    .bind(id)
+                    .execute(&state.db)
+                    .await
+                    .ok();
+                tracing::info!("Admin cancel: refund issued for booking {}", id);
+            } else {
+                tracing::error!("Admin cancel: refund failed for booking {}", id);
+            }
+        }
+    }
 
     sqlx::query("UPDATE bookings SET status = 'cancelled', cancelled_at = datetime('now', '+3 hours') WHERE id = ?")
         .bind(id)
@@ -419,9 +449,15 @@ pub async fn cancel_booking(
     let b_date = booking.date.as_deref().unwrap_or("?");
     let b_start = booking.start_time.as_deref().unwrap_or("?");
 
+    let refund_text = if booking.payment_status == "paid" {
+        format!("\n\n💰 Предоплата {} ₽ будет возвращена", booking.prepaid_amount)
+    } else {
+        String::new()
+    };
+
     let message = format!(
-        "😔 Твоя запись на {} в {} была отменена мастером.\n\nВыбери другое время 💕",
-        b_date, b_start
+        "😔 Твоя запись на {} в {} была отменена мастером.{}",
+        b_date, b_start, refund_text
     );
 
     let url = format!("https://api.telegram.org/bot{}/sendMessage", state.bot_token);

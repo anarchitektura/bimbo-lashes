@@ -87,6 +87,23 @@ export interface BookingDetail {
   created_at: string;
   with_lower_lashes?: boolean;
   total_price?: number;
+  payment_status?: string;
+  prepaid_amount?: number;
+}
+
+export interface CreateBookingResponse {
+  booking: BookingDetail;
+  payment_url?: string;
+}
+
+export interface BookingStatusResponse {
+  status: string;
+  payment_status: string;
+}
+
+export interface CancelBookingResponse {
+  message: string;
+  refund_info?: string;
 }
 
 // ── Client API ──
@@ -109,7 +126,7 @@ export const api = {
     request<AvailableTimes>(`/api/available-times?date=${date}&service_id=${serviceId}`),
 
   createBooking: (serviceId: number, date: string, startTime: string, withLowerLashes: boolean = false) =>
-    request<BookingDetail>("/api/bookings", {
+    request<CreateBookingResponse>("/api/bookings", {
       method: "POST",
       body: JSON.stringify({
         service_id: serviceId,
@@ -122,7 +139,10 @@ export const api = {
   getMyBookings: () => request<BookingDetail[]>("/api/bookings/my"),
 
   cancelBooking: (id: number) =>
-    request<string>(`/api/bookings/${id}`, { method: "DELETE" }),
+    request<CancelBookingResponse>(`/api/bookings/${id}`, { method: "DELETE" }),
+
+  getBookingStatus: (id: number) =>
+    request<BookingStatusResponse>(`/api/bookings/${id}/status`),
 };
 
 // ── Admin API ──
